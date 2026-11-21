@@ -1,0 +1,1878 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Glyphsmith — Turn a Character Sheet into a TrueType Font</title>
+<meta name="description" content="Upload a hand-drawn alphabet sheet, slice and trace each character, and export a real .ttf font — entirely in your browser." />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          forge: { 300:'#fcd9a8', 400:'#fbbf6b', 500:'#f59e0b', 600:'#d97706' },
+          panel: '#12141a', panel2:'#171a21', edge:'#262b36'
+        },
+        fontFamily: {
+          sans: ['Inter','ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','sans-serif'],
+          mono: ['ui-monospace','SFMono-Regular','Menlo','Consolas','monospace']
+        },
+        boxShadow: { glow: '0 0 0 1px rgba(245,158,11,.25), 0 10px 40px -12px rgba(245,158,11,.35)' }
+      }
+    }
+  };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/opentype.js/1.3.4/opentype.min.js"></script>
+<style>
+  html{ background:#0a0b0e; }
+  body{ background:
+      radial-gradient(1100px 500px at 85% -5%, rgba(245,158,11,.10), transparent 60%),
+      radial-gradient(900px 480px at -10% 10%, rgba(45,212,191,.07), transparent 55%),
+      #0a0b0e; }
+  ::selection{ background:#f59e0b; color:#111; }
+  *{ scrollbar-width:thin; scrollbar-color:#3a4152 transparent; }
+  *::-webkit-scrollbar{ width:8px; height:8px; } *::-webkit-scrollbar-thumb{ background:#3a4152; border-radius:99px; }
+
+  .card{ background:linear-gradient(180deg,#14161d,#101218); border:1px solid #262b36; border-radius:1.1rem; }
+  .card-h{ display:flex; align-items:flex-start; gap:.9rem; padding:1.1rem 1.25rem; border-bottom:1px solid #22262f; }
+  .step-badge{ flex:none; width:2.35rem; height:2.35rem; border-radius:.8rem; display:grid; place-items:center;
+    background:linear-gradient(160deg,#f59e0b,#b45309); color:#181003; font-weight:800; box-shadow:0 6px 18px -6px rgba(245,158,11,.6); }
+  .btn{ display:inline-flex; align-items:center; justify-content:center; gap:.45rem; font-weight:600; font-size:.85rem;
+    border-radius:.7rem; padding:.55rem .95rem; border:1px solid #2c323f; background:#1b1f28; color:#e7eaf0;
+    transition:all .15s ease; cursor:pointer; user-select:none; white-space:nowrap; }
+  .btn:hover{ background:#232834; border-color:#3a4152; transform:translateY(-1px); }
+  .btn:active{ transform:translateY(0); }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; transform:none; }
+  .btn-primary{ background:linear-gradient(160deg,#f6ad2d,#d97706); border-color:#b45309; color:#1c1204; }
+  .btn-primary:hover{ background:linear-gradient(160deg,#ffb63e,#ea8609); border-color:#d97706; }
+  .btn-teal{ background:linear-gradient(160deg,#2dd4bf,#0d9488); border-color:#0f766e; color:#04211d; }
+  .btn-teal:hover{ background:linear-gradient(160deg,#5eead4,#14b8a6); }
+  .btn-danger:hover{ background:#3a1620; border-color:#7f1d2d; color:#fda4af; }
+  .btn-tool[aria-pressed="true"]{ background:#f59e0b; border-color:#d97706; color:#1c1204; }
+  .btn-tool[aria-pressed="true"]:hover{ background:#fbbf24; }
+
+  .field{ width:100%; background:#0d0f14; border:1px solid #2a2f3c; border-radius:.7rem; color:#eef1f6;
+    padding:.55rem .8rem; font-size:.9rem; outline:none; transition:border-color .15s, box-shadow .15s; }
+  .field:focus{ border-color:#f59e0b; box-shadow:0 0 0 3px rgba(245,158,11,.18); }
+  select.field{ appearance:none; }
+  label.lbl{ display:block; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:#9aa3b2; font-weight:700; margin-bottom:.4rem; }
+  input[type="range"]{ accent-color:#f59e0b; width:100%; }
+  input[type="checkbox"]{ accent-color:#f59e0b; width:1rem; height:1rem; }
+
+  #canvasWrap{ background:
+      radial-gradient(circle at 1px 1px, #232833 1px, transparent 0) 0 0/22px 22px, #0b0c10; }
+  #mainCanvas{ touch-action:none; display:block; width:100%; height:100%; }
+  #mainCanvas[data-tool="draw"]{ cursor:crosshair; } #mainCanvas[data-tool="pan"]{ cursor:grab; }
+  #mainCanvas[data-tool="wand"]{ cursor:cell; } #mainCanvas[data-tool="select"]{ cursor:default; }
+  #mainCanvas.panning{ cursor:grabbing !important; }
+
+  .checker{ background: conic-gradient(#e8e8e8 25%, #fff 0 50%, #e8e8e8 0 75%, #fff 0) 0 0/14px 14px; }
+  .preview-canvas{ width:100%; height:7.2rem; border-radius:.65rem; border:1px solid #2a2f3c; background:#fff; }
+
+  .glyph-tile{ position:relative; border:1px solid #2a2f3c; background:#12151c; border-radius:.75rem; padding:.35rem .2rem .3rem;
+    display:flex; flex-direction:column; align-items:center; gap:.15rem; cursor:pointer; transition:all .13s; min-height:4.4rem; }
+  .glyph-tile:hover{ border-color:#4b5568; transform:translateY(-1px); }
+  .glyph-tile.mapped{ border-color:rgba(45,212,191,.55); background:rgba(13,84,74,.18); }
+  .glyph-tile.target{ border-color:#f59e0b; box-shadow:0 0 0 2px rgba(245,158,11,.35); }
+  .glyph-tile.selected{ border-color:#fbbf24; background:rgba(245,158,11,.12); box-shadow:0 0 0 2px rgba(251,191,36,.4); }
+  .glyph-tile .thumb{ width:2.5rem; height:2.1rem; object-fit:contain; background:#fff; border-radius:.35rem; }
+  .glyph-tile .ch{ font-size:1.15rem; line-height:2.1rem; height:2.1rem; color:#5b6474; font-weight:600; }
+  .glyph-tile.mapped .ch{ color:#99f6e4; }
+  .glyph-tile .cap{ font-size:.62rem; color:#8b93a3; font-family:ui-monospace,Menlo,monospace; }
+
+  .pill{ display:inline-flex; align-items:center; gap:.35rem; font-size:.72rem; font-weight:600; padding:.28rem .6rem; border-radius:99px; border:1px solid #2c323f; background:#151822; color:#aeb6c4; }
+  .pill .dot{ width:.5rem; height:.5rem; border-radius:99px; background:#64748b; }
+  .pill.ok .dot{ background:#2dd4bf; box-shadow:0 0 8px #2dd4bf; } .pill.warn .dot{ background:#f59e0b; box-shadow:0 0 8px #f59e0b; } .pill.bad .dot{ background:#f43f5e; }
+
+  .toast{ background:#191d26; border:1px solid #39405050; border-left:3px solid #f59e0b; color:#eef1f6;
+    padding:.7rem 1rem; border-radius:.7rem; font-size:.85rem; box-shadow:0 16px 40px -12px rgba(0,0,0,.7); animation:toast-in .25s ease both; max-width:min(92vw,26rem); }
+  .toast.ok{ border-left-color:#2dd4bf; } .toast.err{ border-left-color:#f43f5e; }
+  @keyframes toast-in{ from{ opacity:0; transform:translateY(8px);} to{ opacity:1; transform:none;} }
+  .toast.out{ opacity:0; transform:translateY(6px); transition:all .3s; }
+
+  .drop-active{ border-color:#f59e0b !important; background:rgba(245,158,11,.07) !important; }
+  .log-line{ display:flex; gap:.5rem; font-size:.8rem; padding:.3rem 0; border-bottom:1px dashed #22262f; color:#c3cad7; }
+  .log-line:last-child{ border-bottom:none; }
+  kbd{ font-family:ui-monospace,Menlo,monospace; font-size:.68rem; background:#232834; border:1px solid #394050; border-bottom-width:2px; border-radius:.35rem; padding:.08rem .35rem; color:#dbe1ec; }
+  .tester-font{ font-family:'Segoe Print','Comic Sans MS',cursive; }
+  details summary{ cursor:pointer; }
+  .fade-in{ animation:toast-in .3s ease both; }
+</style>
+</head>
+<body class="text-zinc-100 font-sans antialiased min-h-screen">
+
+<!-- ══════════ HEADER ══════════ -->
+<header class="sticky top-0 z-40 backdrop-blur-xl bg-[#0a0b0e]/85 border-b border-edge">
+  <div class="max-w-[1500px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center gap-3">
+    <div class="flex items-center gap-3 mr-auto">
+      <div class="w-10 h-10 rounded-xl grid place-items-center bg-gradient-to-br from-forge-400 to-forge-600 text-[#1c1204] shadow-glow" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 14.5 9.5"/><path d="M13 4l7 7-3.5 1.5L13 9z"/><path d="M13 4l-1.8 3.2L17 13l3-2"/></svg>
+      </div>
+      <div>
+        <h1 class="text-lg sm:text-xl font-extrabold tracking-tight leading-none">Glyphsmith</h1>
+        <p class="text-[11px] sm:text-xs text-zinc-400 mt-0.5">Character sheet → real TrueType font, 100% in your browser</p>
+      </div>
+    </div>
+    <span id="libStatus" class="pill warn"><span class="dot"></span><span>opentype.js: loading…</span></span>
+    <span id="mapStatus" class="pill"><span class="dot"></span><span>0 characters mapped</span></span>
+    <a href="#step4" class="btn btn-primary !py-2">⬇ Export .TTF</a>
+  </div>
+  <!-- Step nav -->
+  <nav class="max-w-[1500px] mx-auto px-4 sm:px-6 pb-3 flex gap-2 overflow-x-auto text-sm" aria-label="Steps">
+    <a href="#step1" class="btn !rounded-full flex-none"><span class="text-forge-400 font-bold">1</span> Upload sheet</a>
+    <a href="#step2" class="btn !rounded-full flex-none"><span class="text-forge-400 font-bold">2</span> Map &amp; slice</a>
+    <a href="#step3" class="btn !rounded-full flex-none"><span class="text-forge-400 font-bold">3</span> Trace, build &amp; test</a>
+    <a href="#step4" class="btn !rounded-full flex-none"><span class="text-forge-400 font-bold">4</span> Download</a>
+    <span class="flex-none ml-auto hidden md:inline-flex items-center text-xs text-zinc-500">No uploads · no server · your image never leaves this tab</span>
+  </nav>
+</header>
+
+<main class="max-w-[1500px] mx-auto px-4 sm:px-6 py-6 space-y-8 pb-24">
+
+  <!-- Intro -->
+  <section class="card p-5 sm:p-6 flex flex-col lg:flex-row gap-5 lg:items-center">
+    <div class="lg:max-w-3xl">
+      <h2 class="text-xl sm:text-2xl font-bold tracking-tight">Forge a font from your own handwriting ✍️</h2>
+      <p class="text-sm text-zinc-400 mt-1.5 leading-relaxed">Write or print an alphabet sheet, photograph or scan it, then drop it in. Draw a box around each character (or let auto-detect do it), watch it get traced into vector outlines, test-type with it, and download a genuine <code class="font-mono text-forge-300">.ttf</code> you can install anywhere.</p>
+    </div>
+    <ol class="grid grid-cols-2 lg:grid-cols-1 gap-2 text-[13px] text-zinc-300 lg:ml-auto flex-none">
+      <li class="flex gap-2"><span class="text-teal-300">✓</span> Works with photos, scans &amp; screenshots</li>
+      <li class="flex gap-2"><span class="text-teal-300">✓</span> Real vector glyphs via marching-squares tracing</li>
+      <li class="flex gap-2"><span class="text-teal-300">✓</span> Live type-tester before you download</li>
+      <li class="flex gap-2"><span class="text-teal-300">✓</span> Private — everything runs locally</li>
+    </ol>
+  </section>
+
+  <!-- ══════════ STEP 1 · UPLOAD ══════════ -->
+  <section id="step1" class="card scroll-mt-32">
+    <div class="card-h">
+      <div class="step-badge">1</div>
+      <div>
+        <h2 class="font-bold text-lg leading-tight">Upload your character sheet</h2>
+        <p class="text-sm text-zinc-400">A clear, evenly-lit image of A–Z, a–z, 0–9 and any punctuation you want. Dark ink on light paper works best.</p>
+      </div>
+    </div>
+    <div class="p-5 grid lg:grid-cols-3 gap-5">
+      <div class="lg:col-span-2">
+        <div id="dropZone" class="border-2 border-dashed border-[#333a49] rounded-2xl bg-[#0d0f14] px-6 py-10 text-center transition-all cursor-pointer hover:border-forge-500/60 hover:bg-forge-500/5" role="button" tabindex="0" aria-label="Upload an image">
+          <div class="text-4xl mb-2" aria-hidden="true">🗂️</div>
+          <p class="font-semibold">Drag &amp; drop your sheet here, or <span class="text-forge-400 underline underline-offset-2">click to browse</span></p>
+          <p class="text-xs text-zinc-500 mt-1.5">PNG, JPG, WebP, GIF or BMP · you can also paste an image with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+          <input id="fileInput" type="file" accept="image/*" class="hidden" />
+        </div>
+        <div class="flex flex-wrap gap-2 mt-4">
+          <button id="chooseBtn" class="btn btn-primary" type="button">📁 Choose image…</button>
+          <button id="demoBtn" class="btn btn-teal" type="button">✨ Load demo sheet &amp; auto-slice it</button>
+          <button id="pasteBtn" class="btn" type="button">📋 Paste from clipboard</button>
+        </div>
+        <p class="text-xs text-zinc-500 mt-3">No sheet handy? The demo sheet is generated on a canvas right here, sliced automatically, and ready to build into a font so you can try the whole pipeline in one click.</p>
+      </div>
+      <aside class="bg-panel2 border border-edge rounded-xl p-4">
+        <h3 class="lbl !mb-3">Image</h3>
+        <dl class="text-sm space-y-2.5">
+          <div class="flex justify-between gap-3"><dt class="text-zinc-500">File</dt><dd id="metaName" class="font-medium truncate max-w-[60%]">—</dd></div>
+          <div class="flex justify-between gap-3"><dt class="text-zinc-500">Dimensions</dt><dd id="metaDims" class="font-medium">—</dd></div>
+          <div class="flex justify-between gap-3"><dt class="text-zinc-500">Size</dt><dd id="metaSize" class="font-medium">—</dd></div>
+          <div class="flex justify-between gap-3"><dt class="text-zinc-500">Status</dt><dd id="metaState" class="font-medium text-amber-300">Waiting for image</dd></div>
+        </dl>
+        <hr class="border-edge my-4" />
+        <h3 class="lbl !mb-2">Tips for a clean trace</h3>
+        <ul class="text-[13px] text-zinc-400 space-y-1.5 list-disc pl-4">
+          <li>Keep characters separated — no touching strokes between neighbours.</li>
+          <li>Even spacing in rows makes <em>Auto-detect</em> and <em>Grid slice</em> effortless.</li>
+          <li>Photograph straight-on, avoid shadows across the page.</li>
+          <li>Blotchy photo? Raise the threshold / clean-up sliders in Step 2.</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ══════════ STEP 2 · MAP & SLICE ══════════ -->
+  <section id="step2" class="card scroll-mt-32">
+    <div class="card-h flex-wrap">
+      <div class="step-badge">2</div>
+      <div class="mr-auto">
+        <h2 class="font-bold text-lg leading-tight">Map &amp; slice characters</h2>
+        <p class="text-sm text-zinc-400">Draw a box around a character to assign it, click a box to edit it, or let auto-detect find everything at once.</p>
+      </div>
+      <div class="flex items-center gap-3 min-w-[220px]">
+        <div class="flex-1 h-2.5 rounded-full bg-[#0d0f14] border border-edge overflow-hidden"><div id="progressBar" class="h-full w-0 bg-gradient-to-r from-teal-400 to-forge-500 transition-all duration-500"></div></div>
+        <span id="progressText" class="text-xs font-semibold text-zinc-300 whitespace-nowrap">0 / 0 mapped</span>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="px-4 sm:px-5 pt-4 flex flex-wrap items-center gap-2" role="toolbar" aria-label="Canvas tools">
+      <div class="flex gap-1.5" role="group" aria-label="Tool">
+        <button class="btn btn-tool" id="toolSelect" type="button" aria-pressed="true" title="Select / move / resize (V)">↖ Select</button>
+        <button class="btn btn-tool" id="toolDraw" type="button" aria-pressed="false" title="Draw a bounding box (B)">▭ Draw box</button>
+        <button class="btn btn-tool" id="toolWand" type="button" aria-pressed="false" title="Click a character to auto-box it (W)">🪄 Click-select</button>
+        <button class="btn btn-tool" id="toolPan" type="button" aria-pressed="false" title="Pan the view (H, or hold Space)">✋ Pan</button>
+      </div>
+      <div class="flex items-center gap-1.5" role="group" aria-label="Zoom">
+        <button class="btn !px-2.5" id="zoomOut" type="button" title="Zoom out (−)">−</button>
+        <span id="zoomLabel" class="text-xs font-mono w-14 text-center text-zinc-300">100%</span>
+        <button class="btn !px-2.5" id="zoomIn" type="button" title="Zoom in (+)">+</button>
+        <button class="btn" id="zoomFit" type="button">Fit</button>
+        <button class="btn" id="zoom100" type="button">100%</button>
+      </div>
+      <label class="pill cursor-pointer"><input type="checkbox" id="labelsToggle" checked /> Show labels</label>
+      <div class="flex gap-1.5 ml-auto">
+        <button class="btn" id="undoBtn" type="button" title="Undo (Ctrl+Z)">↩ Undo</button>
+        <button class="btn btn-danger" id="deleteSelectedBtn" type="button" title="Delete selected box (Del)">🗑 Delete box</button>
+      </div>
+    </div>
+
+    <!-- Assignment bar -->
+    <div class="mx-4 sm:mx-5 mt-3 flex flex-wrap items-center gap-2.5 bg-forge-500/10 border border-forge-500/30 rounded-xl px-3.5 py-2.5">
+      <span class="text-sm">Next box will be:</span>
+      <span id="targetCharPreview" class="w-9 h-9 grid place-items-center rounded-lg bg-forge-500 text-[#1c1204] font-extrabold text-lg leading-none">A</span>
+      <input id="targetCharInput" class="field !w-16 text-center font-bold" maxlength="4" value="A" aria-label="Character for the next box" />
+      <button id="setTargetBtn" class="btn !py-1.5" type="button">Set</button>
+      <button id="nextMissingBtn" class="btn !py-1.5" type="button">Next missing ⏭</button>
+      <label class="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer"><input type="checkbox" id="autoAdvanceCheck" checked /> Auto-advance after each box</label>
+      <span id="assignmentHint" class="text-xs text-zinc-400 ml-auto">Draw a box on the sheet to capture “A”.</span>
+    </div>
+
+    <div class="p-4 sm:p-5 grid xl:grid-cols-[minmax(0,1fr)_370px] gap-5 items-start">
+      <!-- Canvas -->
+      <div>
+        <div id="canvasWrap" class="relative h-[62vh] min-h-[380px] rounded-xl border border-edge overflow-hidden">
+          <canvas id="mainCanvas" data-tool="select"></canvas>
+          <div id="canvasEmpty" class="absolute inset-0 grid place-items-center pointer-events-none">
+            <div class="text-center px-6">
+              <div class="text-5xl mb-3 opacity-70" aria-hidden="true">🔤</div>
+              <p class="font-semibold text-zinc-300">Your sheet will appear here</p>
+              <p class="text-sm text-zinc-500 mt-1">Upload an image in Step 1 — then zoom, pan and slice it.</p>
+            </div>
+          </div>
+          <div class="absolute left-3 bottom-3 flex gap-2 pointer-events-none">
+            <span id="coordsReadout" class="pill font-mono !text-[11px]">—</span>
+            <span class="pill !text-[11px] hidden sm:inline-flex">Scroll = zoom · Space+drag = pan</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-x-4 gap-y-1.5 mt-3 text-[11px] text-zinc-500">
+          <span><kbd>V</kbd> select</span><span><kbd>B</kbd> draw</span><span><kbd>W</kbd> click-select</span><span><kbd>H</kbd> pan</span>
+          <span><kbd>←→↑↓</kbd> nudge</span><span><kbd>Del</kbd> remove</span><span><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
+          <span>Double-click a letter with Select to auto-box it</span>
+        </div>
+
+        <!-- Character map -->
+        <div class="card !rounded-xl mt-5">
+          <div class="flex flex-wrap items-center gap-2.5 px-4 py-3 border-b border-edge">
+            <h3 class="font-bold text-sm mr-auto">Character map <span id="gridCount" class="text-zinc-500 font-medium"></span></h3>
+            <label class="text-xs text-zinc-400 flex items-center gap-1.5">Set
+              <select id="charsetPreset" class="field !w-auto !py-1.5 !text-xs">
+                <option value="full">Full (A–Z a–z 0–9 punctuation)</option>
+                <option value="alpha">Letters A–Z + a–z</option>
+                <option value="upper">Uppercase A–Z</option>
+                <option value="lower">Lowercase a–z</option>
+                <option value="alnum">Alphanumeric</option>
+                <option value="digits">Digits 0–9</option>
+              </select>
+            </label>
+            <div class="flex items-center gap-1.5">
+              <input id="customCharInput" class="field !w-14 !py-1.5 text-center" maxlength="4" placeholder="é" aria-label="Add a custom character" />
+              <button id="addCharBtn" class="btn !py-1.5" type="button">+ Add char</button>
+            </div>
+          </div>
+          <div class="px-4 py-3">
+            <div class="flex gap-4 text-[11px] text-zinc-400 mb-3">
+              <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded border border-teal-400/70 bg-teal-400/15 inline-block"></span> Mapped</span>
+              <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded border border-[#2a2f3c] bg-[#12151c] inline-block"></span> Missing</span>
+              <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded border border-forge-500 bg-forge-500/15 inline-block"></span> Next target (click a tile to aim)</span>
+            </div>
+            <div id="glyphGrid" class="grid grid-cols-[repeat(auto-fill,minmax(3.4rem,1fr))] gap-1.5 max-h-[340px] overflow-y-auto pr-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right rail -->
+      <div class="space-y-5">
+        <!-- Selected glyph editor -->
+        <div class="bg-panel2 border border-edge rounded-xl p-4">
+          <h3 class="font-bold text-sm mb-1">Selected glyph</h3>
+          <div id="selectedEmpty" class="text-sm text-zinc-500 py-3">Nothing selected. Click a box on the sheet or a green tile in the character map.</div>
+          <div id="selectedEditor" class="hidden">
+            <div class="flex items-end gap-3 mb-3">
+              <div id="editorCharLabel" class="text-5xl font-extrabold leading-none text-forge-300">A</div>
+              <div class="text-xs text-zinc-400 leading-relaxed">
+                <div id="editorUnicode" class="font-mono">U+0041</div>
+                <div id="editorCoords" class="font-mono">x 0 · y 0 · 0×0 px</div>
+              </div>
+              <button id="focusGlyphBtn" class="btn !py-1.5 ml-auto" type="button" title="Centre this box in view">◎ Focus</button>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center">
+              <figure><canvas id="cropCanvas" class="preview-canvas" width="260" height="200"></canvas><figcaption class="text-[11px] text-zinc-500 mt-1">1 · Crop</figcaption></figure>
+              <figure><canvas id="binaryCanvas" class="preview-canvas" width="260" height="200"></canvas><figcaption class="text-[11px] text-zinc-500 mt-1">2 · Threshold</figcaption></figure>
+              <figure><canvas id="vectorCanvas" class="preview-canvas" width="260" height="200"></canvas><figcaption class="text-[11px] text-zinc-500 mt-1">3 · Vector trace</figcaption></figure>
+            </div>
+            <p id="traceStats" class="text-[11px] font-mono text-zinc-500 mt-2">—</p>
+            <div class="flex flex-wrap items-end gap-2 mt-3">
+              <div class="flex-1 min-w-[7rem]"><label class="lbl" for="reassignInput">Reassign to</label><input id="reassignInput" class="field text-center font-bold" maxlength="4" /></div>
+              <button id="reassignBtn" class="btn" type="button">Reassign</button>
+              <button id="retraceBtn" class="btn" type="button" title="Re-run the trace with current settings">↻ Re-trace</button>
+              <button id="deleteGlyphBtn" class="btn btn-danger" type="button">Delete</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Trace settings -->
+        <div class="bg-panel2 border border-edge rounded-xl p-4">
+          <h3 class="font-bold text-sm mb-3">Trace settings <span class="text-zinc-500 font-medium">(apply to every glyph)</span></h3>
+          <div class="space-y-4">
+            <div>
+              <div class="flex justify-between items-baseline"><label class="lbl !mb-1" for="thresholdRange">Ink threshold</label><span class="flex items-center gap-2"><button id="otsuBtn" class="btn !py-0.5 !px-2 !text-[11px]" type="button" title="Pick a threshold automatically (Otsu)">Auto (Otsu)</button><span id="thresholdValue" class="font-mono text-xs text-forge-300">180</span></span></div>
+              <input id="thresholdRange" type="range" min="40" max="245" step="1" value="180" />
+              <p class="text-[11px] text-zinc-500">Pixels darker than this count as ink. Lower it if strokes look broken; raise it if shadows appear as blobs.</p>
+            </div>
+            <div>
+              <div class="flex justify-between"><label class="lbl !mb-1" for="simplifyRange">Outline detail</label><span id="simplifyValue" class="font-mono text-xs text-forge-300">1.4 px</span></div>
+              <input id="simplifyRange" type="range" min="0" max="4" step="0.1" value="1.4" />
+              <p class="text-[11px] text-zinc-500">Higher = fewer points, smoother but less faithful. 0 keeps every pixel step.</p>
+            </div>
+            <div>
+              <div class="flex justify-between"><label class="lbl !mb-1" for="speckRange">Speckle clean-up</label><span id="speckValue" class="font-mono text-xs text-forge-300">10 px²</span></div>
+              <input id="speckRange" type="range" min="0" max="120" step="2" value="10" />
+              <p class="text-[11px] text-zinc-500">Contours smaller than this are discarded as dust/noise.</p>
+            </div>
+            <div class="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+              <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="invertCheck" /> Invert <span class="text-zinc-500 text-xs">(light ink on dark)</span></label>
+              <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="smoothCheck" checked /> Smooth curves</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto slicing -->
+        <div class="bg-panel2 border border-edge rounded-xl p-4">
+          <h3 class="font-bold text-sm mb-1">Auto-slicing</h3>
+          <p class="text-xs text-zinc-500 mb-3">Characters are handed out left-to-right, top-to-bottom in this order:</p>
+          <label class="lbl" for="assignOrder">Assignment order</label>
+          <textarea id="assignOrder" class="field font-mono !text-xs" rows="3" spellcheck="false"></textarea>
+          <button id="autoDetectBtn" class="btn btn-teal w-full mt-3" type="button">🪄 Auto-detect characters</button>
+          <p class="text-[11px] text-zinc-500 mt-1.5">Finds ink blobs, reunites dotted i's and colons, then boxes everything it finds.</p>
+          <hr class="border-edge my-4" />
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="lbl" for="gridRows">Grid rows</label><input id="gridRows" type="number" class="field" min="1" max="40" value="8" /></div>
+            <div><label class="lbl" for="gridCols">Grid cols</label><input id="gridCols" type="number" class="field" min="1" max="40" value="10" /></div>
+          </div>
+          <button id="gridSliceBtn" class="btn w-full mt-3" type="button">▦ Slice sheet by grid</button>
+          <button id="clearAllBtn" class="btn btn-danger w-full mt-2" type="button">Clear all boxes</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ STEP 3 · BUILD & TEST ══════════ -->
+  <section id="step3" class="card scroll-mt-32">
+    <div class="card-h">
+      <div class="step-badge">3</div>
+      <div>
+        <h2 class="font-bold text-lg leading-tight">Build the font &amp; test-drive it</h2>
+        <p class="text-sm text-zinc-400">Glyphsmith traces every box into vector outlines and builds a font with <span class="font-mono text-zinc-300">opentype.js</span>, serialised as genuine TrueType. Type below to proof it live.</p>
+      </div>
+    </div>
+    <div class="p-5 grid lg:grid-cols-[380px_minmax(0,1fr)] gap-5 items-start">
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="lbl" for="fontFamilyInput">Font family name</label><input id="fontFamilyInput" class="field" value="My Handwriting" maxlength="60" /></div>
+          <div><label class="lbl" for="styleNameInput">Style name</label><input id="styleNameInput" class="field" value="Regular" maxlength="30" /></div>
+        </div>
+        <div>
+          <label class="lbl" for="sizingModeSelect">Glyph sizing</label>
+          <select id="sizingModeSelect" class="field">
+            <option value="smart" selected>Smart normalize — fit each glyph to its class (cap / x-height / descenders…)</option>
+            <option value="preserve">Preserve position in box — best for evenly-gridded sheets</option>
+          </select>
+          <p class="text-[11px] text-zinc-500 mt-1.5">Smart mode suits hand-drawn tight boxes: “a” gets x-height, “g” dips below the baseline, “.” stays a dot. Preserve mode trusts your boxes/grid exactly.</p>
+        </div>
+        <div>
+          <div class="flex justify-between"><label class="lbl !mb-1" for="sideBearingRange">Side spacing (bearings)</label><span id="sideBearingValue" class="font-mono text-xs text-forge-300">60 units</span></div>
+          <input id="sideBearingRange" type="range" min="0" max="160" step="5" value="60" />
+        </div>
+        <button id="buildBtn" class="btn btn-primary w-full !py-3 !text-base" type="button">⚒ Build font &amp; load preview</button>
+        <div id="buildStatus" class="pill warn w-full justify-center"><span class="dot"></span><span>Not built yet</span></div>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="bg-panel2 border border-edge rounded-xl py-2.5"><div id="statGlyphs" class="font-extrabold text-lg leading-none">–</div><div class="text-[10px] uppercase tracking-wider text-zinc-500 mt-1">Glyphs</div></div>
+          <div class="bg-panel2 border border-edge rounded-xl py-2.5"><div id="statPoints" class="font-extrabold text-lg leading-none">–</div><div class="text-[10px] uppercase tracking-wider text-zinc-500 mt-1">Points</div></div>
+          <div class="bg-panel2 border border-edge rounded-xl py-2.5"><div id="statSize" class="font-extrabold text-lg leading-none">–</div><div class="text-[10px] uppercase tracking-wider text-zinc-500 mt-1">TTF size</div></div>
+        </div>
+        <div>
+          <h3 class="lbl !mb-1">Build log</h3>
+          <div id="buildLog" class="bg-[#0d0f14] border border-edge rounded-xl px-3.5 py-2 max-h-44 overflow-y-auto">
+            <div class="log-line"><span>·</span><span>Map some characters, then hit <strong>Build font</strong>.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <h3 class="font-bold text-sm mr-auto">Live type tester</h3>
+          <div class="flex flex-wrap gap-1.5" role="group" aria-label="Sample text">
+            <button class="btn !py-1 !text-xs sample-btn" type="button" data-sample="The quick brown fox jumps over the lazy dog 0123456789">Pangram</button>
+            <button class="btn !py-1 !text-xs sample-btn" type="button" data-sample="ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz">Alphabet</button>
+            <button class="btn !py-1 !text-xs sample-btn" type="button" data-sample="Pack my box with five dozen liquor jugs! How vexingly quick daft zebras jump.">Sentences</button>
+            <button class="btn !py-1 !text-xs sample-btn" type="button" data-sample="Hello world! This is my very own font — made by hand, shipped as a .ttf">Hello</button>
+          </div>
+        </div>
+        <textarea id="testerText" class="field tester-font !text-[26px] leading-snug min-h-[150px] !bg-[#f7f3ea] !text-zinc-900 !border-[#d8d2c2]" rows="4" spellcheck="false">The quick brown fox jumps over the lazy dog 0123456789</textarea>
+        <div class="grid sm:grid-cols-2 gap-4 mt-3">
+          <div><div class="flex justify-between"><label class="lbl !mb-1" for="testerSize">Size</label><span id="testerSizeValue" class="font-mono text-xs text-forge-300">44 px</span></div><input id="testerSize" type="range" min="14" max="110" value="44" /></div>
+          <div><div class="flex justify-between"><label class="lbl !mb-1" for="testerTracking">Letter spacing</label><span id="testerTrackingValue" class="font-mono text-xs text-forge-300">0 px</span></div><input id="testerTracking" type="range" min="-2" max="14" step="0.5" value="0" /></div>
+        </div>
+        <p id="testerNote" class="text-xs text-amber-300/90 mt-2">⚠ Showing a fallback font — build your font to preview the real thing. Unmapped characters also fall back.</p>
+        <h3 class="lbl !mt-5">Specimen — every mapped character in your font</h3>
+        <div id="specimen" class="tester-font rounded-xl border border-[#d8d2c2] bg-[#f7f3ea] text-zinc-900 px-4 py-3 text-[30px] leading-relaxed break-words min-h-[84px]">AaBbCcDdEeFfGg 0123</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ STEP 4 · DOWNLOAD ══════════ -->
+  <section id="step4" class="card scroll-mt-32">
+    <div class="card-h">
+      <div class="step-badge">4</div>
+      <div>
+        <h2 class="font-bold text-lg leading-tight">Download your .TTF</h2>
+        <p class="text-sm text-zinc-400">A standard TrueType font (unitsPerEm 1000, ascender 850, descender −250) that installs on Windows, macOS, Linux, Android &amp; iOS.</p>
+      </div>
+    </div>
+    <div class="p-5 grid lg:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
+      <div>
+        <div class="flex flex-wrap items-center gap-3">
+          <button id="downloadBtn" class="btn btn-primary !py-3.5 !px-7 !text-base shadow-glow" type="button">⬇ Build &amp; download .TTF</button>
+          <div class="text-sm"><div class="text-zinc-400 text-xs">File name</div><div id="downloadFileName" class="font-mono font-semibold">MyHandwriting-Regular.ttf</div></div>
+        </div>
+        <p id="downloadSummary" class="text-sm text-zinc-400 mt-3">Your font will include .notdef + space automatically; every mapped character becomes a glyph. If you tweak boxes or settings after building, downloading rebuilds first — you always get the latest.</p>
+        <div class="grid sm:grid-cols-3 gap-3 mt-5 text-sm">
+          <div class="bg-panel2 border border-edge rounded-xl p-3.5"><div class="font-bold mb-1">🪟 Windows</div><p class="text-zinc-400 text-[13px]">Right-click the .ttf → <em>Install</em>, or drop it into <span class="font-mono text-xs">C:\Windows\Fonts</span>.</p></div>
+          <div class="bg-panel2 border border-edge rounded-xl p-3.5"><div class="font-bold mb-1">🍎 macOS</div><p class="text-zinc-400 text-[13px]">Double-click the .ttf and choose <em>Install Font</em> in Font Book.</p></div>
+          <div class="bg-panel2 border border-edge rounded-xl p-3.5"><div class="font-bold mb-1">🐧 Linux</div><p class="text-zinc-400 text-[13px]">Copy it to <span class="font-mono text-xs">~/.local/share/fonts</span> and run <span class="font-mono text-xs">fc-cache -f</span>.</p></div>
+        </div>
+      </div>
+      <aside class="bg-panel2 border border-edge rounded-xl p-4">
+        <h3 class="lbl !mb-2.5">Pre-flight checklist</h3>
+        <ul id="checklist" class="text-[13px] space-y-2 text-zinc-300">
+          <li data-check="image" class="flex gap-2"><span class="ck">○</span> Sheet uploaded</li>
+          <li data-check="upper" class="flex gap-2"><span class="ck">○</span> Uppercase A–Z mapped</li>
+          <li data-check="lower" class="flex gap-2"><span class="ck">○</span> Lowercase a–z mapped</li>
+          <li data-check="digits" class="flex gap-2"><span class="ck">○</span> Digits 0–9 mapped</li>
+          <li data-check="built" class="flex gap-2"><span class="ck">○</span> Font built &amp; proofed in the tester</li>
+        </ul>
+        <hr class="border-edge my-4" />
+        <details class="text-[13px] text-zinc-400">
+          <summary class="font-semibold text-zinc-200">How it works under the hood</summary>
+          <p class="mt-2 leading-relaxed">Each box is cropped, thresholded to a 1-bit bitmap, and traced with a marching-squares contour follower. Contours are simplified (Douglas–Peucker), optionally smoothed into quadratic Béziers, holes are counter-wound, then scaled into a 1000-unit em with per-class heights. <span class="font-mono text-xs">opentype.js</span> builds the Font object, glyphs and metrics; because that release only writes CFF-flavoured OpenType, Glyphsmith then serialises the same font object into genuine TrueType <span class="font-mono text-xs">glyf/loca/cmap/head/name</span> tables — the exact bytes your OS expects from any font foundry.</p>
+        </details>
+      </aside>
+    </div>
+  </section>
+
+  <footer class="text-center text-xs text-zinc-600 pb-4">
+    Glyphsmith · single-file app · tracing &amp; font assembly run locally with canvas + opentype.js · no image ever leaves your device.
+  </footer>
+</main>
+
+<div id="toasts" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end" aria-live="polite"></div>
+
+<script>
+(function(){
+'use strict';
+/* ───────────────────────── helpers ───────────────────────── */
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
+const uniqChars = str => Array.from(new Set(Array.from(String(str||''))));
+function firstChar(str){ const a = Array.from(String(str||'')); return a.length ? a[0] : ''; }
+function escFileName(s){ return (s||'font').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'') || 'GlyphsmithFont'; }
+function toast(msg, kind){
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' '+kind : '');
+  el.textContent = msg;
+  $('#toasts').appendChild(el);
+  setTimeout(()=>{ el.classList.add('out'); setTimeout(()=>el.remove(), 350); }, 4200);
+}
+function glyphNameFor(ch){
+  const NAMES = {' ':'space','!':'exclam','"':'quotedbl','#':'numbersign','$':'dollar','%':'percent','&':'ampersand',"'":'quotesingle','(':'parenleft',')':'parenright','*':'asterisk','+':'plus',',':'comma','-':'hyphen','.':'period','/':'slash',':':'colon',';':'semicolon','<':'less','=':'equal','>':'greater','?':'question','@':'at','[':'bracketleft','\\':'backslash',']':'bracketright','^':'asciicircum','_':'underscore','`':'grave','{':'braceleft','|':'bar','}':'braceright','~':'asciitilde','0':'zero','1':'one','2':'two','3':'three','4':'four','5':'five','6':'six','7':'seven','8':'eight','9':'nine','€':'Euro','£':'sterling','¥':'yen','©':'copyright','®':'registered','°':'degree','·':'periodcentered','•':'bullet','…':'ellipsis','–':'endash','—':'emdash','‘':'quoteleft','’':'quoteright','“':'quotedblleft','”':'quotedblright','«':'guillemotleft','»':'guillemotright'};
+  if (NAMES[ch] !== undefined) return NAMES[ch];
+  if (/^[A-Za-z0-9]$/.test(ch)) return ch;
+  const cp = ch.codePointAt(0);
+  return (cp <= 0xFFFF ? 'uni' : 'u') + cp.toString(16).toUpperCase().padStart(4,'0');
+}
+function unicodeLabel(ch){
+  const cp = ch.codePointAt(0);
+  return 'U+' + cp.toString(16).toUpperCase().padStart(4,'0') + (ch === ' ' ? ' SPACE' : '');
+}
+
+/* ───────────────────────── state ───────────────────────── */
+const CHARSETS = {
+  full:  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.,:;\'"-()&@#%*+=/\\',
+  alpha: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+  upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  lower: 'abcdefghijklmnopqrstuvwxyz',
+  alnum: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
+  digits:'0123456789'
+};
+const state = {
+  image: null, imageName: '', imageSize: 0, imgVer: 0,
+  glyphs: new Map(),           // char -> {id,char,x,y,w,h,version}
+  nextId: 1, selectedId: null, targetChar: 'A',
+  tool: 'select', spaceDown: false,
+  view: { scale: 1, ox: 0, oy: 0 },
+  trace: { threshold: 180, invert: false, simplify: 1.4, smooth: true, speck: 10 },
+  gridChars: uniqChars(CHARSETS.full),
+  font: { family: 'My Handwriting', style: 'Regular', sizing: 'smart', sideBearing: 60 },
+  builtBuffer: null, builtFamily: '', dirty: true, previewFace: null, previewCount: 0,
+  history: [], componentsCache: null
+};
+let traceCache = new Map();
+let thumbCache = new Map();
+
+/* ───────────────────────── DOM refs ───────────────────────── */
+const canvas = $('#mainCanvas'), ctx = canvas.getContext('2d');
+const wrap = $('#canvasWrap');
+let viewW = 300, viewH = 300, dpr = 1;
+
+/* ───────────────────────── history ───────────────────────── */
+function snapshot(){ return Array.from(state.glyphs.values()).map(g=>({...g})); }
+function pushHistory(){
+  state.history.push(snapshot());
+  if (state.history.length > 40) state.history.shift();
+  updateUndoBtn();
+}
+function undo(){
+  const prev = state.history.pop();
+  if (!prev) return;
+  state.glyphs = new Map(prev.map(g=>[g.char, g]));
+  state.selectedId = null; traceCache.clear(); thumbCache.clear();
+  markDirty(); syncAll(); draw(); toast('Undone.', 'ok'); updateUndoBtn();
+}
+function updateUndoBtn(){ $('#undoBtn').disabled = state.history.length === 0; }
+
+/* ───────────────────────── glyph CRUD ───────────────────────── */
+function findGlyph(id){ for (const g of state.glyphs.values()) if (g.id === id) return g; return null; }
+function selectedGlyph(){ return state.selectedId ? findGlyph(state.selectedId) : null; }
+function clampRect(r){
+  if (!state.image) return r;
+  const W = state.image.naturalWidth, H = state.image.naturalHeight;
+  r.x = clamp(r.x, 0, W-4); r.y = clamp(r.y, 0, H-4);
+  r.w = clamp(r.w, 4, W - r.x); r.h = clamp(r.h, 4, H - r.y);
+  return r;
+}
+function addGlyph(ch, rect, opts){
+  opts = opts || {};
+  if (!ch) return null;
+  if (opts.history !== false) pushHistory();
+  rect = clampRect({ x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+  const existing = state.glyphs.get(ch);
+  const g = existing || { id: state.nextId++, char: ch, version: 0 };
+  Object.assign(g, rect); g.version++;
+  state.glyphs.set(ch, g);
+  traceCache.delete(g.id); thumbCache.delete(g.id);
+  if (opts.select !== false) state.selectedId = g.id;
+  markDirty();
+  return g;
+}
+function deleteGlyph(id, opts){
+  opts = opts || {};
+  const g = findGlyph(id); if (!g) return;
+  if (opts.history !== false) pushHistory();
+  state.glyphs.delete(g.char);
+  traceCache.delete(g.id); thumbCache.delete(g.id);
+  if (state.selectedId === id) state.selectedId = null;
+  markDirty();
+}
+function markDirty(){
+  state.dirty = true; state.componentsCache = null;
+  if (state.builtBuffer) setBuildStatus('warn', 'Font is stale — rebuild to include latest edits');
+  updateDownloadBtn(); updateMeta();
+}
+function nextMissingChar(){
+  const order = assignmentOrder();
+  for (const ch of order) if (!state.glyphs.has(ch)) return ch;
+  for (const ch of state.gridChars) if (!state.glyphs.has(ch)) return ch;
+  return null;
+}
+function assignmentOrder(){
+  return uniqChars($('#assignOrder').value).filter(c => c !== ' ' && c !== '\n' && c !== '\t');
+}
+function setTargetChar(ch, silent){
+  if (!ch) return;
+  state.targetChar = ch;
+  $('#targetCharInput').value = ch;
+  $('#targetCharPreview').textContent = ch === ' ' ? '␣' : ch;
+  $('#assignmentHint').textContent = state.glyphs.has(ch)
+    ? '“' + ch + '” is already mapped — drawing a new box will replace it.'
+    : 'Draw a box on the sheet to capture “' + ch + '”.';
+  if (!silent) renderGrid();
+}
+
+/* ───────────────────────── image loading ───────────────────────── */
+function loadImageBlob(blob, name){
+  return new Promise((resolve, reject)=>{
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = ()=>{
+      if (state.glyphs.size && !window.__loadingDemo) {
+        // keep boxes only if the user confirms the new sheet replaces the old one
+        if (!confirm('Load a new sheet? Existing character boxes will be cleared.')) { URL.revokeObjectURL(url); reject(new Error('cancelled')); return; }
+      }
+      state.image = img; state.imageName = name || 'pasted-image.png';
+      state.imageSize = blob.size || 0; state.imgVer++;
+      state.glyphs.clear(); state.selectedId = null; state.history = [];
+      traceCache.clear(); thumbCache.clear(); state.componentsCache = null;
+      $('#canvasEmpty').style.display = 'none';
+      fitView(); markDirty(); syncAll();
+      $('#metaName').textContent = state.imageName;
+      $('#metaDims').textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' px';
+      $('#metaSize').textContent = blob.size ? (blob.size/1024).toFixed(0) + ' KB' : '—';
+      $('#metaState').textContent = 'Loaded ✓'; $('#metaState').className = 'font-medium text-teal-300';
+      setTargetChar(nextMissingChar() || 'A', true); renderGrid();
+      toast('Sheet loaded: ' + img.naturalWidth + '×' + img.naturalHeight + ' px. Now slice some characters!', 'ok');
+      resolve(img);
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('That file could not be read as an image.')); };
+    img.src = url;
+  });
+}
+function handleFile(file){
+  if (!file) return;
+  if (!/^image\//.test(file.type) && !/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name)) { toast('Please choose an image file.', 'err'); return; }
+  if (file.size > 30*1024*1024) { toast('That image is over 30 MB — please downscale it first.', 'err'); return; }
+  loadImageBlob(file, file.name).catch(e=>{ if (e.message !== 'cancelled') toast(e.message, 'err'); });
+}
+
+/* Demo sheet: drawn locally, then auto-sliced with its known cells */
+function loadDemoSheet(){
+  if (state.glyphs.size && !confirm('Load the demo sheet? Your current image and ' + state.glyphs.size + ' mapped box(es) will be replaced.')) return;
+  const chars = Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789').concat(['!','?','.',',',':',';','-','(',')','&','@','#','%','*','+','=']);
+  const cols = 10, cellW = 164, cellH = 148, padTop = 26, padLeft = 22;
+  const rows = Math.ceil(chars.length / cols);
+  const c = document.createElement('canvas');
+  c.width = padLeft*2 + cols*cellW; c.height = padTop*2 + rows*cellH;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fdfcf8'; g.fillRect(0,0,c.width,c.height);
+  g.strokeStyle = '#e9e6da'; g.lineWidth = 2;
+  for (let i=0;i<=cols;i++){ g.beginPath(); g.moveTo(padLeft+i*cellW, padTop); g.lineTo(padLeft+i*cellW, c.height-padTop); g.stroke(); }
+  for (let i=0;i<=rows;i++){ g.beginPath(); g.moveTo(padLeft, padTop+i*cellH); g.lineTo(c.width-padLeft, padTop+i*cellH); g.stroke(); }
+  g.fillStyle = '#191919'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '700 84px "Segoe Print","Bradley Hand","Comic Sans MS",cursive';
+  const cells = chars.map((ch,i)=>{
+    const x = padLeft + (i%cols)*cellW, y = padTop + Math.floor(i/cols)*cellH;
+    g.fillText(ch, x+cellW/2, y+cellH/2+4);
+    return { char: ch, x: x+10, y: y+10, w: cellW-20, h: cellH-20 };
+  });
+  window.__loadingDemo = true;
+  c.toBlob(async blob=>{
+    try {
+      await loadImageBlob(blob, 'glyphsmith-demo-sheet.png');
+      pushHistory();
+      for (const cell of cells) addGlyph(cell.char, cell, { history:false, select:false });
+      state.selectedId = null; markDirty(); syncAll(); draw();
+      toast('Demo sheet sliced: ' + cells.length + ' characters mapped. Jump to Step 3 and build the font!', 'ok');
+      document.getElementById('step3').scrollIntoView({ behavior:'smooth', block:'start' });
+    } catch(e){ if (e.message !== 'cancelled') toast(e.message, 'err'); }
+    window.__loadingDemo = false;
+  }, 'image/png');
+}
+
+/* ───────────────────────── canvas view ───────────────────────── */
+function resizeCanvas(){
+  const r = wrap.getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  viewW = Math.max(50, r.width); viewH = Math.max(50, r.height);
+  canvas.width = Math.round(viewW*dpr); canvas.height = Math.round(viewH*dpr);
+  draw();
+}
+function fitView(){
+  if (!state.image) return;
+  const W = state.image.naturalWidth, H = state.image.naturalHeight;
+  state.view.scale = clamp(Math.min((viewW-48)/W, (viewH-48)/H), 0.02, 8);
+  state.view.ox = (viewW - W*state.view.scale)/2;
+  state.view.oy = (viewH - H*state.view.scale)/2;
+  updateZoomLabel(); draw();
+}
+function updateZoomLabel(){ $('#zoomLabel').textContent = Math.round(state.view.scale*100) + '%'; }
+function zoomAt(cx, cy, factor){
+  const v = state.view, ns = clamp(v.scale*factor, 0.03, 14);
+  const k = ns / v.scale;
+  v.ox = cx - (cx - v.ox)*k; v.oy = cy - (cy - v.oy)*k; v.scale = ns;
+  updateZoomLabel(); draw();
+}
+function toImage(px, py){ return { x: (px - state.view.ox)/state.view.scale, y: (py - state.view.oy)/state.view.scale }; }
+function toScreen(ix, iy){ return { x: ix*state.view.scale + state.view.ox, y: iy*state.view.scale + state.view.oy }; }
+function pointerPos(e){ const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+
+function draw(){
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,viewW,viewH);
+  if (!state.image) return;
+  const v = state.view;
+  ctx.save();
+  ctx.translate(v.ox, v.oy); ctx.scale(v.scale, v.scale);
+  ctx.imageSmoothingEnabled = true;
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,state.image.naturalWidth, state.image.naturalHeight);
+  ctx.drawImage(state.image, 0, 0);
+  ctx.restore();
+
+  const showLabels = $('#labelsToggle').checked;
+  for (const g of state.glyphs.values()) drawBox(g, g.id === state.selectedId, showLabels);
+  if (drawRect) {
+    const a = toScreen(drawRect.x, drawRect.y), b = toScreen(drawRect.x+drawRect.w, drawRect.y+drawRect.h);
+    ctx.save();
+    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+    ctx.fillStyle = 'rgba(245,158,11,.12)';
+    ctx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y); ctx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
+    ctx.restore();
+  }
+}
+function drawBox(g, isSel, showLabels){
+  const a = toScreen(g.x, g.y), b = toScreen(g.x+g.w, g.y+g.h);
+  ctx.save();
+  ctx.fillStyle = isSel ? 'rgba(245,158,11,.14)' : 'rgba(45,212,191,.08)';
+  ctx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
+  ctx.strokeStyle = isSel ? '#fbbf24' : '#2dd4bf';
+  ctx.lineWidth = isSel ? 2.5 : 1.6;
+  if (isSel) { ctx.shadowColor = 'rgba(251,191,36,.7)'; ctx.shadowBlur = 8; }
+  ctx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
+  ctx.shadowBlur = 0;
+  if (showLabels) {
+    const label = g.char === ' ' ? '␣' : g.char;
+    ctx.font = '700 11px ui-monospace, Menlo, monospace';
+    const w = ctx.measureText(label).width + 10;
+    const ly = Math.max(0, a.y - 18);
+    ctx.fillStyle = isSel ? '#f59e0b' : 'rgba(13,84,74,.92)';
+    ctx.beginPath(); ctx.roundRect(a.x, ly, w, 16, 4); ctx.fill();
+    ctx.fillStyle = isSel ? '#1c1204' : '#ccfbf1';
+    ctx.fillText(label, a.x+5, ly+12);
+  }
+  if (isSel) {
+    ctx.fillStyle = '#0b0c10'; ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.6;
+    for (const h of handlePoints(g)) { ctx.beginPath(); ctx.rect(h.x-5, h.y-5, 10, 10); ctx.fill(); ctx.stroke(); }
+  }
+  ctx.restore();
+}
+function handlePoints(g){
+  const a = toScreen(g.x, g.y), b = toScreen(g.x+g.w, g.y+g.h), mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+  return [ {k:'nw',x:a.x,y:a.y},{k:'n',x:mx,y:a.y},{k:'ne',x:b.x,y:a.y},{k:'e',x:b.x,y:my},
+           {k:'se',x:b.x,y:b.y},{k:'s',x:mx,y:b.y},{k:'sw',x:a.x,y:b.y},{k:'w',x:a.x,y:my} ];
+}
+function hitHandle(g, p){ return handlePoints(g).find(h => Math.abs(h.x-p.x) <= 8 && Math.abs(h.y-p.y) <= 8) || null; }
+function hitBox(ip){
+  let best = null, bestArea = Infinity;
+  for (const g of state.glyphs.values()) {
+    if (ip.x >= g.x && ip.x <= g.x+g.w && ip.y >= g.y && ip.y <= g.y+g.h) {
+      const area = g.w*g.h; if (area < bestArea) { bestArea = area; best = g; }
+    }
+  }
+  return best;
+}
+
+/* pointer interaction */
+let drag = null, drawRect = null;
+const activePointers = new Map();
+let pinch = null;
+
+canvas.addEventListener('pointerdown', e=>{
+  if (!state.image) return;
+  canvas.setPointerCapture(e.pointerId);
+  const p = pointerPos(e);
+  activePointers.set(e.pointerId, p);
+  if (activePointers.size === 2) {
+    const pts = Array.from(activePointers.values());
+    pinch = { d: Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y), cx: (pts[0].x+pts[1].x)/2, cy: (pts[0].y+pts[1].y)/2 };
+    drag = null; drawRect = null; return;
+  }
+  const ip = toImage(p.x, p.y);
+  const tool = state.spaceDown || e.button === 1 ? 'pan' : state.tool;
+  if (tool === 'pan') { drag = { kind:'pan', sx:p.x, sy:p.y, ox: state.view.ox, oy: state.view.oy }; canvas.classList.add('panning'); return; }
+  if (tool === 'wand') {
+    const g = wandSelect(ip);
+    if (g) { syncAll(); } else toast('No ink found near that click — try Draw box instead.', 'err');
+    return;
+  }
+  if (tool === 'draw') {
+    const hit = hitBox(ip);
+    if (hit) { selectGlyph(hit.id); return; }   // click-to-select existing region
+    drag = { kind:'draw', sx: ip.x, sy: ip.y };
+    drawRect = { x: ip.x, y: ip.y, w: 0, h: 0 };
+    return;
+  }
+  // select tool
+  const sel = selectedGlyph();
+  if (sel) { const h = hitHandle(sel, p); if (h) { pushHistory(); drag = { kind:'resize', id: sel.id, handle: h.k, orig: {...sel} }; return; } }
+  const hit = hitBox(ip);
+  if (hit) {
+    selectGlyph(hit.id);
+    pushHistory();
+    drag = { kind:'move', id: hit.id, dx: ip.x - hit.x, dy: ip.y - hit.y, orig: {...hit}, moved:false };
+  } else {
+    state.selectedId = null; syncEditor(); renderGrid(); draw();
+  }
+});
+canvas.addEventListener('pointermove', e=>{
+  const p = pointerPos(e);
+  if (state.image) {
+    const ip = toImage(p.x, p.y);
+    $('#coordsReadout').textContent = 'x ' + Math.round(ip.x) + ' · y ' + Math.round(ip.y) + ' · ' + Math.round(state.view.scale*100) + '%';
+  }
+  if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, p);
+  if (pinch && activePointers.size === 2) {
+    const pts = Array.from(activePointers.values());
+    const d = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y), cx = (pts[0].x+pts[1].x)/2, cy = (pts[0].y+pts[1].y)/2;
+    if (pinch.d > 0) zoomAt(cx, cy, d/pinch.d);
+    state.view.ox += cx - pinch.cx; state.view.oy += cy - pinch.cy;
+    pinch = { d, cx, cy }; draw(); return;
+  }
+  if (!drag) return;
+  const ip = toImage(p.x, p.y);
+  if (drag.kind === 'pan') { state.view.ox = drag.ox + (p.x-drag.sx); state.view.oy = drag.oy + (p.y-drag.sy); draw(); }
+  else if (drag.kind === 'draw') {
+    drawRect = { x: Math.min(drag.sx, ip.x), y: Math.min(drag.sy, ip.y), w: Math.abs(ip.x-drag.sx), h: Math.abs(ip.y-drag.sy) };
+    draw();
+  }
+  else if (drag.kind === 'move') {
+    const g = findGlyph(drag.id); if (!g) return;
+    g.x = ip.x - drag.dx; g.y = ip.y - drag.dy; clampRect(g); drag.moved = true; draw();
+  }
+  else if (drag.kind === 'resize') {
+    const g = findGlyph(drag.id), o = drag.orig; if (!g) return;
+    let { x, y, w, h } = o;
+    if (drag.handle.includes('e')) w = Math.max(6, ip.x - x);
+    if (drag.handle.includes('s')) h = Math.max(6, ip.y - y);
+    if (drag.handle.includes('w')) { const nr = x + w; x = Math.min(ip.x, nr-6); w = nr - x; }
+    if (drag.handle.includes('n')) { const nb = y + h; y = Math.min(ip.y, nb-6); h = nb - y; }
+    Object.assign(g, clampRect({x,y,w,h})); draw();
+  }
+});
+function endPointer(e){
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) pinch = null;
+  canvas.classList.remove('panning');
+  if (!drag) return;
+  const finished = drag; drag = null;
+  if (finished.kind === 'draw' && drawRect) {
+    const r = drawRect; drawRect = null;
+    if (r.w >= 6 && r.h >= 6 && state.targetChar) {
+      const ch = state.targetChar;
+      addGlyph(ch, r);
+      toast('Mapped “' + ch + '”.', 'ok');
+      if ($('#autoAdvanceCheck').checked) {
+        const nxt = nextMissingChar();
+        if (nxt) setTargetChar(nxt); else toast('Every character in the set is mapped 🎉 Head to Step 3!', 'ok');
+      }
+      syncAll();
+    } else if (r.w >= 6 && r.h >= 6) toast('Pick a target character first.', 'err');
+    draw();
+  }
+  if (finished.kind === 'move' || finished.kind === 'resize') {
+    const g = findGlyph(finished.id);
+    if (g) {
+      if (finished.kind === 'move' && !finished.moved) { /* plain click: history entry not needed */ state.history.pop(); updateUndoBtn(); }
+      g.version++; traceCache.delete(g.id); thumbCache.delete(g.id);
+      markDirty(); syncAll();
+    }
+    draw();
+  }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('wheel', e=>{
+  if (!state.image) return;
+  e.preventDefault();
+  const p = pointerPos(e);
+  zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0016));
+}, { passive:false });
+canvas.addEventListener('dblclick', e=>{
+  if (!state.image || state.tool !== 'select') return;
+  const ip = toImage(...(r=> [r.x, r.y])(pointerPos(e)));
+  const g = wandSelect(ip);
+  if (g) syncAll();
+});
+function selectGlyph(id){
+  state.selectedId = id;
+  const g = findGlyph(id);
+  if (g) setTargetChar(g.char, true);
+  syncEditor(); renderGrid(); draw();
+}
+function focusGlyph(g){
+  if (!g) return;
+  state.view.scale = clamp(Math.min(viewW/(g.w*2.4), viewH/(g.h*2.4)), 0.05, 10);
+  state.view.ox = viewW/2 - (g.x+g.w/2)*state.view.scale;
+  state.view.oy = viewH/2 - (g.y+g.h/2)*state.view.scale;
+  updateZoomLabel(); draw();
+}
+
+/* ── click-to-select via connected components ── */
+function wandSelect(ip){
+  const comps = computeComponents();
+  if (!comps.length) return null;
+  let best = null, bestScore = Infinity;
+  for (const c of comps) {
+    const inside = ip.x >= c.x-6 && ip.x <= c.x+c.w+6 && ip.y >= c.y-6 && ip.y <= c.y+c.h+6;
+    const cx = c.x+c.w/2, cy = c.y+c.h/2;
+    const d = Math.hypot(cx-ip.x, cy-ip.y);
+    const score = inside ? d - 10000 : d;
+    if (score < bestScore) { bestScore = score; best = c; }
+  }
+  if (!best || bestScore > 9000) return null;
+  const ch = state.targetChar;
+  if (!ch) { toast('Pick a target character first.', 'err'); return null; }
+  const g = addGlyph(ch, best);
+  toast('Click-selected “' + ch + '” — drag edges to fine-tune.', 'ok');
+  if ($('#autoAdvanceCheck').checked) { const n = nextMissingChar(); if (n) setTargetChar(n, true); }
+  return g;
+}
+
+/* ───────────────────────── tracing ─────────────────────────
+   bitmap → marching-squares contours → simplified polygons   */
+function cropBitmap(glyph, maxDim){
+  const iw = state.image.naturalWidth, ih = state.image.naturalHeight;
+  const sx = clamp(Math.round(glyph.x), 0, iw-1), sy = clamp(Math.round(glyph.y), 0, ih-1);
+  const sw = clamp(Math.round(glyph.w), 1, iw-sx), sh = clamp(Math.round(glyph.h), 1, ih-sy);
+  const f = Math.min(1, maxDim / Math.max(sw, sh));
+  const W = Math.max(1, Math.round(sw*f)), H = Math.max(1, Math.round(sh*f));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = '#fff'; g.fillRect(0,0,W,H);
+  g.drawImage(state.image, sx, sy, sw, sh, 0, 0, W, H);
+  const data = g.getImageData(0,0,W,H).data;
+  const bin = new Uint8Array(W*H);
+  const T = state.trace.threshold, inv = state.trace.invert;
+  let minX = W, minY = H, maxX = -1, maxY = -1, ink = 0;
+  for (let y=0; y<H; y++) for (let x=0; x<W; x++) {
+    const i = (y*W+x)*4;
+    const lum = 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
+    const fg = inv ? (lum > T) : (lum < T);
+    if (fg) { bin[y*W+x] = 1; ink++; if (x<minX)minX=x; if (x>maxX)maxX=x; if (y<minY)minY=y; if (y>maxY)maxY=y; }
+  }
+  return { bin, W, H, bbox: ink ? { minX, minY, maxX, maxY } : null, ink };
+}
+
+/* marching squares over a padded point-grid; returns closed loops in pixel-centre coords */
+function traceBinary(bin, W, H){
+  const PW = W+2, PH = H+2;
+  const at = (x,y)=> (x<1||y<1||x>PW-2||y>PH-2) ? 0 : bin[(y-1)*W + (x-1)];
+  // edge-midpoint keys use doubled coordinates
+  const edges = [], adj = new Map();
+  function addEdge(a, b){
+    const id = edges.length; edges.push([a,b]);
+    for (const k of [a,b]) { if (!adj.has(k)) adj.set(k, []); adj.get(k).push(id); }
+  }
+  const PAIRS = {1:[['L','B']],2:[['B','R']],3:[['L','R']],4:[['T','R']],5:[['T','R'],['L','B']],6:[['T','B']],7:[['T','L']],8:[['T','L']],9:[['T','B']],10:[['T','L'],['B','R']],11:[['T','R']],12:[['L','R']],13:[['B','R']],14:[['L','B']]};
+  for (let cy=0; cy<PH-1; cy++) for (let cx=0; cx<PW-1; cx++) {
+    const idx = (at(cx,cy)?8:0) | (at(cx+1,cy)?4:0) | (at(cx+1,cy+1)?2:0) | (at(cx,cy+1)?1:0);
+    if (idx === 0 || idx === 15) continue;
+    const P = { T:(2*cx+1)+','+(2*cy), R:(2*cx+2)+','+(2*cy+1), B:(2*cx+1)+','+(2*cy+2), L:(2*cx)+','+(2*cy+1) };
+    for (const [a,b] of PAIRS[idx]) addEdge(P[a], P[b]);
+  }
+  const used = new Uint8Array(edges.length);
+  const decode = k => { const [x,y] = k.split(',').map(Number); return [x/2 - 1, y/2 - 1]; };
+  const loops = [];
+  for (let s=0; s<edges.length; s++) {
+    if (used[s]) continue;
+    used[s] = 1;
+    const startKey = edges[s][0];
+    const pts = [decode(edges[s][0]), decode(edges[s][1])];
+    let cur = edges[s][1], closed = false;
+    while (true) {
+      if (cur === startKey) { closed = true; break; }
+      const incident = adj.get(cur) || [];
+      let nxt = -1;
+      for (const id of incident) if (!used[id]) { nxt = id; break; }
+      if (nxt < 0) break;
+      used[nxt] = 1;
+      cur = edges[nxt][0] === cur ? edges[nxt][1] : edges[nxt][0];
+      if (cur !== startKey) pts.push(decode(cur));
+    }
+    if (closed && pts.length >= 3) loops.push(pts);
+  }
+  return loops;
+}
+function polyArea(pts){
+  let a = 0;
+  for (let i=0;i<pts.length;i++){ const [x1,y1]=pts[i], [x2,y2]=pts[(i+1)%pts.length]; a += x1*y2 - x2*y1; }
+  return a/2;
+}
+function pointInPoly(pt, poly){
+  let inside = false;
+  for (let i=0, j=poly.length-1; i<poly.length; j=i++) {
+    const [xi,yi]=poly[i], [xj,yj]=poly[j];
+    if (((yi>pt[1]) !== (yj>pt[1])) && (pt[0] < (xj-xi)*(pt[1]-yi)/(yj-yi)+xi)) inside = !inside;
+  }
+  return inside;
+}
+function segDist(p, a, b){
+  const dx = b[0]-a[0], dy = b[1]-a[1], L2 = dx*dx+dy*dy;
+  if (!L2) return Math.hypot(p[0]-a[0], p[1]-a[1]);
+  let t = ((p[0]-a[0])*dx + (p[1]-a[1])*dy)/L2; t = clamp(t,0,1);
+  return Math.hypot(p[0]-(a[0]+t*dx), p[1]-(a[1]+t*dy));
+}
+function dpChain(pts, keep){
+  if (pts.length < 3) { pts.forEach((_,i)=>keep.add(i)); return; }
+  const stack = [[0, pts.length-1]];
+  keep.add(0); keep.add(pts.length-1);
+  while (stack.length) {
+    const [a,b] = stack.pop();
+    let dmax = 0, idx = -1;
+    for (let i=a+1;i<b;i++){ const d = segDist(pts[i], pts[a], pts[b]); if (d > dmax){ dmax = d; idx = i; } }
+    if (idx >= 0 && dmax > dpChain.eps) { keep.add(idx); stack.push([a,idx],[idx,b]); }
+  }
+}
+function simplifyClosed(pts, eps){
+  // dedupe
+  const p = [];
+  for (const pt of pts) { const l = p[p.length-1]; if (!l || Math.abs(l[0]-pt[0])>1e-6 || Math.abs(l[1]-pt[1])>1e-6) p.push(pt); }
+  if (p.length > 1) { const f=p[0], l=p[p.length-1]; if (Math.abs(f[0]-l[0])<1e-6 && Math.abs(f[1]-l[1])<1e-6) p.pop(); }
+  if (p.length < 5 || eps <= 0) return p;
+  let far = 0, fd = -1;
+  for (let i=1;i<p.length;i++){ const d = Math.hypot(p[i][0]-p[0][0], p[i][1]-p[0][1]); if (d>fd){ fd=d; far=i; } }
+  const chainA = p.slice(0, far+1);
+  const chainB = p.slice(far).concat([p[0]]);
+  dpChain.eps = eps;
+  const keepA = new Set(), keepB = new Set();
+  dpChain(chainA, keepA); dpChain(chainB, keepB);
+  const out = [];
+  chainA.forEach((pt,i)=>{ if (keepA.has(i)) out.push(pt); });
+  chainB.forEach((pt,i)=>{ if (i>0 && i<chainB.length-1 && keepB.has(i)) out.push(pt); });
+  return out.length >= 3 ? out : p;
+}
+
+function getTrace(glyph){
+  const sig = [state.imgVer, glyph.version, state.trace.threshold, state.trace.invert, state.trace.simplify, state.trace.speck].join('|');
+  const hit = traceCache.get(glyph.id);
+  if (hit && hit.sig === sig) return hit.result;
+  const bmp = cropBitmap(glyph, 288);
+  let loops = [], points = 0;
+  if (bmp.bbox) {
+    loops = traceBinary(bmp.bin, bmp.W, bmp.H)
+      .map(l => simplifyClosed(l, state.trace.simplify))
+      .filter(l => l.length >= 3 && Math.abs(polyArea(l)) >= Math.max(1.5, state.trace.speck));
+    // nesting depth (even = outer contour, odd = hole)
+    loops = loops.map((loop,i)=>{
+      let depth = 0;
+      for (let j=0;j<loops.length;j++) if (j!==i && pointInPoly(loop[0], loops[j])) depth++;
+      return { pts: loop, depth };
+    });
+    points = loops.reduce((n,l)=>n+l.pts.length, 0);
+  }
+  const result = { bmp, loops, points };
+  traceCache.set(glyph.id, { sig, result });
+  return result;
+}
+
+/* glyph metrics: where a tight-cropped glyph sits in the em */
+function targetFor(ch){
+  if (/^[A-Z0-9]$/.test(ch)) return { h: 700, base: 0 };
+  if ('gjpqy'.includes(ch)) return { h: 712, base: -212 };
+  if ('bdhklt'.includes(ch)) return { h: 700, base: 0 };
+  if (ch === 'f') return { h: 730, base: 0 };
+  if (ch === 'i') return { h: 700, base: 0 };
+  if (ch === 'j') return { h: 712, base: -212 };
+  if (/^[a-z]$/.test(ch)) return { h: 505, base: 0 };
+  const P = { '.':{h:110,base:0}, ',':{h:150,base:-45}, ':':{h:380,base:0}, ';':{h:410,base:-45},
+    "'":{h:170,base:505}, '‘':{h:170,base:505}, '’':{h:170,base:505}, '`':{h:170,base:505}, '"':{h:170,base:505}, '“':{h:170,base:505}, '”':{h:170,base:505},
+    '-':{h:85,base:250}, '–':{h:85,base:250}, '—':{h:85,base:250}, '_':{h:80,base:-12},
+    '!':{h:700,base:0}, '?':{h:700,base:0}, '(':{h:740,base:-40}, ')':{h:740,base:-40}, '[':{h:720,base:-20}, ']':{h:720,base:-20},
+    '{':{h:720,base:-20}, '}':{h:720,base:-20}, '/':{h:720,base:0}, '\\':{h:720,base:0}, '|':{h:700,base:0},
+    '*':{h:330,base:330}, '+':{h:360,base:170}, '=':{h:260,base:220}, '<':{h:440,base:130}, '>':{h:440,base:130},
+    '%':{h:700,base:0}, '@':{h:680,base:0}, '&':{h:700,base:0}, '#':{h:660,base:20}, '$':{h:760,base:-55},
+    '€':{h:700,base:0}, '£':{h:700,base:0}, '¥':{h:700,base:0}, '~':{h:120,base:320}, '^':{h:150,base:490},
+    '•':{h:130,base:265}, '·':{h:110,base:255}, '…':{h:110,base:0}, '°':{h:190,base:490}, '©':{h:430,base:270}, '®':{h:430,base:270} };
+  return P[ch] || { h: 600, base: 0 };
+}
+/* returns {path (opentype), advanceWidth, points} for one glyph */
+function buildGlyphPath(glyph){
+  const { bmp, loops } = getTrace(glyph);
+  const path = new opentype.Path();
+  const sb = state.font.sideBearing;
+  if (!bmp.bbox || !loops.length) return { path, advance: 300, points: 0, blank: true };
+  const bb = bmp.bbox;
+  const minX = bb.minX - 0.5, maxX = bb.maxX + 0.5, minY = bb.minY - 0.5, maxY = bb.maxY + 0.5;
+  let toFont;
+  let advance;
+  if (state.font.sizing === 'preserve') {
+    const s = 740 / bmp.H;
+    toFont = (x,y)=>[ (x+0.5)*s + sb*0.5, ((bmp.H-0.5)-y)*s ];
+    advance = Math.round(bmp.W*s + sb);
+  } else {
+    const t = targetFor(glyph.char);
+    let s = t.h / (maxY-minY);
+    if ((maxX-minX)*s > 860) s = 860/(maxX-minX);
+    toFont = (x,y)=>[ (x-minX)*s + sb, t.base + (maxY-y)*s ];
+    advance = Math.round((maxX-minX)*s + sb*2);
+  }
+  advance = clamp(advance, 120, 1100);
+  let points = 0;
+  for (const { pts, depth } of loops) {
+    let fp = pts.map(([x,y])=>{ const [fx,fy] = toFont(x,y); return [Math.round(fx), Math.round(fy)]; })
+                 .filter((p,i,a)=> i===0 || p[0]!==a[i-1][0] || p[1]!==a[i-1][1]);
+    if (fp.length > 1) { const f=fp[0], l=fp[fp.length-1]; if (f[0]===l[0] && f[1]===l[1]) fp.pop(); }
+    if (fp.length < 3) continue;
+    // TrueType winding (y-up): outer contours clockwise (area<0), holes counter-clockwise (area>0)
+    const area = polyArea(fp);
+    const wantNegative = depth % 2 === 0;
+    if ((area < 0) !== wantNegative) fp.reverse();
+    points += fp.length;
+    if (state.trace.smooth && fp.length >= 4) {
+      const mid = (a,b)=>[Math.round((a[0]+b[0])/2), Math.round((a[1]+b[1])/2)];
+      const start = mid(fp[fp.length-1], fp[0]);
+      path.moveTo(start[0], start[1]);
+      for (let i=0;i<fp.length;i++) { const m = mid(fp[i], fp[(i+1)%fp.length]); path.quadraticCurveTo(fp[i][0], fp[i][1], m[0], m[1]); }
+      path.closePath();
+    } else {
+      path.moveTo(fp[0][0], fp[0][1]);
+      for (let i=1;i<fp.length;i++) path.lineTo(fp[i][0], fp[i][1]);
+      path.closePath();
+    }
+  }
+  return { path, advance, points, blank: points === 0 };
+}
+
+/* ───────────── TrueType (glyf) serializer ─────────────
+   opentype.js builds the Font/Glyph model we construct below, but the
+   1.3.4 release always serialises CFF outlines ('OTTO') from
+   toArrayBuffer(). To ship a genuine TrueType .ttf we walk the same
+   opentype.Font object (glyphs, paths, advances, names, metrics) and
+   emit classic glyf/loca/cmap tables ourselves. */
+function serializeTrueType(font){
+  function BW(){ this.b = []; }
+  BW.prototype.u8 = function(v){ this.b.push(v & 255); };
+  BW.prototype.u16 = function(v){ v &= 0xffff; this.b.push((v>>8)&255, v&255); };
+  BW.prototype.i16 = function(v){ this.u16(v < 0 ? v + 65536 : v); };
+  BW.prototype.u32 = function(v){ v = v>>>0; this.b.push((v>>>24)&255, (v>>>16)&255, (v>>>8)&255, v&255); };
+  BW.prototype.raw = function(arr){ for (let i=0;i<arr.length;i++) this.b.push(arr[i]); };
+  BW.prototype.utf16be = function(str){ for (let i=0;i<str.length;i++) this.u16(str.charCodeAt(i)); };
+  BW.prototype.bytes = function(){ return Uint8Array.from(this.b); };
+  function checksum(bytes){
+    let sum = 0;
+    for (let i=0;i<bytes.length;i+=4) {
+      const v = ((bytes[i]||0)<<24) | ((bytes[i+1]||0)<<16) | ((bytes[i+2]||0)<<8) | (bytes[i+3]||0);
+      sum = (sum + (v>>>0)) % 4294967296;
+    }
+    return sum>>>0;
+  }
+
+  const numGlyphs = font.glyphs.length;
+  const unitsPerEm = font.unitsPerEm || 1000;
+  const ascender = font.ascender, descender = font.descender;
+
+  /* ---- path commands → glyf contours ---- */
+  const glyphData = [];
+  for (let gi=0; gi<numGlyphs; gi++) {
+    const glyph = font.glyphs.get(gi);
+    const contours = [];
+    let cur = null;
+    const cmds = (glyph.path && glyph.path.commands) || [];
+    for (const cmd of cmds) {
+      if (cmd.type === 'M') { if (cur && cur.length) contours.push(cur); cur = [[Math.round(cmd.x), Math.round(cmd.y), true]]; }
+      else if (cmd.type === 'L') { if (cur) cur.push([Math.round(cmd.x), Math.round(cmd.y), true]); }
+      else if (cmd.type === 'Q') { if (cur) cur.push([Math.round(cmd.x1), Math.round(cmd.y1), false], [Math.round(cmd.x), Math.round(cmd.y), true]); }
+      else if (cmd.type === 'C') { // never generated by Glyphsmith; flatten defensively
+        if (cur) { const p0 = cur[cur.length-1]; for (let s=1;s<=8;s++){ const t=s/8, u=1-t;
+          cur.push([Math.round(u*u*u*p0[0]+3*u*u*t*cmd.x1+3*u*t*t*cmd.x2+t*t*t*cmd.x), Math.round(u*u*u*p0[1]+3*u*u*t*cmd.y1+3*u*t*t*cmd.y2+t*t*t*cmd.y), true]); } }
+      }
+      else if (cmd.type === 'Z') { if (cur && cur.length) contours.push(cur); cur = null; }
+    }
+    if (cur && cur.length) contours.push(cur);
+    const clean = [];
+    for (let contour of contours) {
+      contour = contour.filter((p,i,a)=> i===0 || p[0]!==a[i-1][0] || p[1]!==a[i-1][1]);
+      if (contour.length > 1) { const f=contour[0], l=contour[contour.length-1]; if (f[0]===l[0] && f[1]===l[1]) contour.pop(); }
+      if (contour.length >= 2) clean.push(contour);
+    }
+    const pts = [], endPts = [];
+    for (const contour of clean) { for (const p of contour) pts.push(p); endPts.push(pts.length-1); }
+    let data = new Uint8Array(0), xMin=0, yMin=0, xMax=0, yMax=0;
+    if (pts.length) {
+      xMin = Math.min(...pts.map(p=>p[0])); xMax = Math.max(...pts.map(p=>p[0]));
+      yMin = Math.min(...pts.map(p=>p[1])); yMax = Math.max(...pts.map(p=>p[1]));
+      const w = new BW();
+      w.i16(clean.length); w.i16(xMin); w.i16(yMin); w.i16(xMax); w.i16(yMax);
+      for (const e of endPts) w.u16(e);
+      w.u16(0); // instructionLength
+      const flags = [], xs = [], ys = [];
+      let px = 0, py = 0;
+      for (const [x,y,on] of pts) {
+        let f = on ? 1 : 0;
+        const dx = x-px, dy = y-py; px = x; py = y;
+        if (dx === 0) f |= 16; else if (Math.abs(dx) <= 255) { f |= 2; if (dx > 0) f |= 16; xs.push(Math.abs(dx)); } 
+        if (dy === 0) f |= 32; else if (Math.abs(dy) <= 255) { f |= 4; if (dy > 0) f |= 32; ys.push(Math.abs(dy)); }
+        flags.push(f);
+        if (!(f & 2) && dx !== 0) { xs.push((dx>>8)&255, dx&255); }
+        if (!(f & 4) && dy !== 0) { ys.push((dy>>8)&255, dy&255); }
+      }
+      // note: short-vector coordinate bytes were queued above in point order via xs/ys placeholders;
+      // rebuild coordinate arrays explicitly to keep ordering unambiguous:
+      const xBytes = [], yBytes = [];
+      px = 0; py = 0;
+      pts.forEach(([x,y],i)=>{
+        const f = flags[i], dx = x-px, dy = y-py; px = x; py = y;
+        if (f & 2) xBytes.push(Math.abs(dx)); else if (dx !== 0) xBytes.push((dx>>8)&255, dx&255);
+        if (f & 4) yBytes.push(Math.abs(dy)); else if (dy !== 0) yBytes.push((dy>>8)&255, dy&255);
+      });
+      for (const f of flags) w.u8(f);
+      w.raw(xBytes); w.raw(yBytes);
+      data = w.bytes();
+    }
+    glyphData.push({ data, xMin, yMin, xMax, yMax, advance: clamp(Math.round(glyph.advanceWidth || 500), 0, 65535),
+                     unicodes: (glyph.unicodes && glyph.unicodes.length) ? glyph.unicodes : (glyph.unicode !== undefined ? [glyph.unicode] : []),
+                     numPoints: pts.length, numContours: clean.length });
+  }
+
+  /* ---- glyf + loca ---- */
+  const locaOffsets = [];
+  let glyfBytes = [];
+  for (const g of glyphData) {
+    locaOffsets.push(glyfBytes.length);
+    glyfBytes = glyfBytes.concat(Array.from(g.data));
+    while (glyfBytes.length % 4) glyfBytes.push(0);
+  }
+  locaOffsets.push(glyfBytes.length);
+  const glyfTable = Uint8Array.from(glyfBytes);
+  const locaW = new BW(); for (const o of locaOffsets) locaW.u32(o);
+  const locaTable = locaW.bytes();
+
+  /* ---- cmap (format 4 for BMP + format 12 when needed) ---- */
+  const cmapOf = new Map();
+  glyphData.forEach((g, gi)=>{ for (const cp of g.unicodes) if (cp > 0 && !cmapOf.has(cp)) cmapOf.set(cp, gi); });
+  const sortedCps = Array.from(cmapOf.keys()).sort((a,b)=>a-b);
+  const bmpCps = sortedCps.filter(cp=>cp <= 0xFFFF);
+  function format4(){
+    const segs = bmpCps.map(cp=>({ start: cp, end: cp, delta: (cmapOf.get(cp) - cp) & 0xffff }));
+    segs.push({ start: 0xFFFF, end: 0xFFFF, delta: 1 });
+    const segCount = segs.length;
+    const pow = Math.pow(2, Math.floor(Math.log2(segCount)));
+    const w = new BW();
+    w.u16(4); w.u16(16 + 8*segCount); w.u16(0);
+    w.u16(segCount*2); w.u16(2*pow); w.u16(Math.log2(pow)); w.u16(2*segCount - 2*pow);
+    for (const s of segs) w.u16(s.end);
+    w.u16(0);
+    for (const s of segs) w.u16(s.start);
+    for (const s of segs) w.u16(s.delta);
+    for (const s of segs) w.u16(0);
+    return w.bytes();
+  }
+  function format12(){
+    const w = new BW();
+    w.u16(12); w.u16(0); w.u32(16 + 12*sortedCps.length); w.u32(0); w.u32(sortedCps.length);
+    for (const cp of sortedCps) { w.u32(cp); w.u32(cp); w.u32(cmapOf.get(cp)); }
+    return w.bytes();
+  }
+  const fmt4 = format4();
+  const need12 = sortedCps.some(cp=>cp > 0xFFFF);
+  const fmt12 = need12 ? format12() : null;
+  const cmapW = new BW();
+  const records = need12 ? [[0,4,'f12'],[3,1,'f4'],[3,10,'f12']] : [[0,3,'f4'],[3,1,'f4']];
+  cmapW.u16(0); cmapW.u16(records.length);
+  let off = 4 + 8*records.length;
+  const off4 = off; off += fmt4.length;
+  const off12 = off;
+  for (const [plat, enc, kind] of records) { cmapW.u16(plat); cmapW.u16(enc); cmapW.u32(kind === 'f4' ? off4 : off12); }
+  cmapW.raw(fmt4); if (fmt12) cmapW.raw(fmt12);
+  const cmapTable = cmapW.bytes();
+
+  /* ---- head / hhea / maxp / hmtx / OS2 / name / post ---- */
+  const gXMin = Math.min(...glyphData.map(g=>g.xMin)), gYMin = Math.min(...glyphData.map(g=>g.yMin));
+  const gXMax = Math.max(...glyphData.map(g=>g.xMax)), gYMax = Math.max(...glyphData.map(g=>g.yMax));
+  const macTime = Math.floor(Date.now()/1000) + 2082844800;
+  const headW = new BW();
+  headW.u32(0x00010000); headW.u32(0x00010000); headW.u32(0); headW.u32(0x5F0F3CF5);
+  headW.u16(0x0003); headW.u16(unitsPerEm); headW.u32(0); headW.u32(macTime); headW.u32(0); headW.u32(macTime);
+  headW.i16(gXMin); headW.i16(gYMin); headW.i16(gXMax); headW.i16(gYMax);
+  headW.u16(0); headW.u16(8); headW.i16(2); headW.i16(1); headW.i16(0);
+  const headTable = headW.bytes();
+
+  const advMax = Math.max(...glyphData.map(g=>g.advance));
+  const minLSB = Math.min(...glyphData.map(g=>g.xMin));
+  const minRSB = Math.min(...glyphData.map(g=> g.advance - g.xMin - (g.xMax - g.xMin)));
+  const xMaxExtent = Math.max(...glyphData.map(g=> g.xMin + (g.xMax - g.xMin)));
+  const hheaW = new BW();
+  hheaW.u32(0x00010000); hheaW.i16(ascender); hheaW.i16(descender); hheaW.i16(0);
+  hheaW.u16(advMax); hheaW.i16(minLSB); hheaW.i16(minRSB); hheaW.i16(xMaxExtent);
+  hheaW.i16(1); hheaW.i16(0); hheaW.i16(0);
+  for (let i=0;i<4;i++) hheaW.i16(0);
+  hheaW.i16(0); hheaW.u16(numGlyphs);
+  const hheaTable = hheaW.bytes();
+
+  const maxpW = new BW();
+  maxpW.u32(0x00010000); maxpW.u16(numGlyphs);
+  maxpW.u16(Math.max(0, ...glyphData.map(g=>g.numPoints)));
+  maxpW.u16(Math.max(0, ...glyphData.map(g=>g.numContours)));
+  maxpW.u16(0); maxpW.u16(0); maxpW.u16(1); maxpW.u16(0); maxpW.u16(0);
+  maxpW.u16(0); maxpW.u16(0); maxpW.u16(0); maxpW.u16(0); maxpW.u16(0); maxpW.u16(0);
+  const maxpTable = maxpW.bytes();
+
+  const hmtxW = new BW();
+  for (const g of glyphData) { hmtxW.u16(g.advance); hmtxW.i16(g.xMin); }
+  const hmtxTable = hmtxW.bytes();
+
+  const bmpSorted = bmpCps.length ? bmpCps : [0];
+  const os2W = new BW();
+  os2W.u16(4); os2W.u16(500); os2W.u16(400); os2W.u16(5); os2W.u16(0);
+  os2W.i16(650); os2W.i16(600); os2W.i16(0); os2W.i16(75);
+  os2W.i16(650); os2W.i16(600); os2W.i16(0); os2W.i16(0);
+  os2W.i16(50); os2W.i16(300); os2W.i16(0);
+  for (let i=0;i<10;i++) os2W.u8(0);
+  os2W.u32(0x00000001); os2W.u32(0); os2W.u32(0); os2W.u32(0);
+  const vend = 'GLYP'; for (let i=0;i<4;i++) os2W.u8(vend.charCodeAt(i));
+  os2W.u16(0x0040);
+  os2W.u16(bmpSorted[0]); os2W.u16(bmpSorted[bmpSorted.length-1]);
+  os2W.i16(ascender); os2W.i16(descender); os2W.i16(0);
+  os2W.u16(Math.max(0, ascender)); os2W.u16(Math.max(0, -descender));
+  os2W.u32(1); os2W.u32(0);
+  os2W.i16(500); os2W.i16(700); os2W.u16(0); os2W.u16(32); os2W.u16(0);
+  const os2Table = os2W.bytes();
+
+  const family = font.getEnglishName('fontFamily') || 'Glyphsmith Font';
+  const style = font.getEnglishName('fontSubfamily') || 'Regular';
+  const version = font.getEnglishName('version') || 'Version 1.000';
+  const psName = ((font.getEnglishName('postScriptName') || (family + '-' + style)).replace(/\s+/g,'').replace(/[\[\](){}<>/%]/g,'').replace(/[^\x21-\x7E]/g,'') || 'GlyphsmithFont');
+  const nameStrings = { 1: family, 2: style, 3: family + ' ' + style + '; ' + version, 4: family + ' ' + style, 5: version, 6: psName, 16: family, 17: style };
+  const nameIds = Object.keys(nameStrings).map(Number).sort((a,b)=>a-b);
+  const nameW = new BW();
+  nameW.u16(0); nameW.u16(nameIds.length); nameW.u16(6 + 12*nameIds.length);
+  let storage = new BW(); const nameEntries = [];
+  for (const id of nameIds) {
+    const s = new BW(); s.utf16be(nameStrings[id]);
+    nameEntries.push({ id, offset: storage.b.length, length: s.b.length });
+    storage.raw(s.b);
+  }
+  for (const e of nameEntries) { nameW.u16(3); nameW.u16(1); nameW.u16(0x0409); nameW.u16(e.id); nameW.u16(e.length); nameW.u16(e.offset); }
+  nameW.raw(storage.b);
+  const nameTable = nameW.bytes();
+
+  const postW = new BW();
+  postW.u32(0x00030000); postW.u32(0); postW.i16(-100); postW.i16(50); postW.u32(0); postW.u32(0); postW.u32(0); postW.u32(0); postW.u32(0);
+  const postTable = postW.bytes();
+
+  /* ---- assemble sfnt ---- */
+  const tables = { 'OS/2': os2Table, 'cmap': cmapTable, 'glyf': glyfTable, 'head': headTable, 'hhea': hheaTable, 'hmtx': hmtxTable, 'loca': locaTable, 'maxp': maxpTable, 'name': nameTable, 'post': postTable };
+  const tags = Object.keys(tables).sort();
+  const numTables = tags.length;
+  const sfntW = new BW();
+  const pow = Math.pow(2, Math.floor(Math.log2(numTables)));
+  let offset = 12 + 16*numTables;
+  const dirEntries = [];
+  for (const tag of tags) {
+    const data = tables[tag];
+    dirEntries.push({ tag, check: checksum(data), offset, length: data.length });
+    offset += data.length; while (offset % 4) offset++;
+  }
+  sfntW.u32(0x00010000); sfntW.u16(numTables); sfntW.u16(16*pow); sfntW.u16(Math.log2(pow)); sfntW.u16(16*numTables - 16*pow);
+  for (const e of dirEntries) { for (let i=0;i<4;i++) sfntW.u8(e.tag.charCodeAt(i)); sfntW.u32(e.check); sfntW.u32(e.offset); sfntW.u32(e.length); }
+  for (const e of dirEntries) {
+    while (sfntW.b.length < e.offset) sfntW.u8(0);
+    sfntW.raw(tables[e.tag]);
+  }
+  while (sfntW.b.length % 4) sfntW.u8(0);
+  const fontBytes = sfntW.bytes();
+  const headOffset = dirEntries.find(e=>e.tag === 'head').offset;
+  const adjustment = (0xB1B0AFBA - checksum(fontBytes)) >>> 0;
+  fontBytes[headOffset+8] = (adjustment>>>24)&255; fontBytes[headOffset+9] = (adjustment>>>16)&255;
+  fontBytes[headOffset+10] = (adjustment>>>8)&255; fontBytes[headOffset+11] = adjustment&255;
+  return fontBytes.buffer.slice(fontBytes.byteOffset, fontBytes.byteOffset + fontBytes.byteLength);
+}
+
+/* ───────────────────────── font build / download ───────────────────────── */
+function setBuildStatus(kind, text){
+  const el = $('#buildStatus');
+  el.className = 'pill w-full justify-center ' + (kind||'');
+  el.innerHTML = '<span class="dot"></span><span></span>';
+  el.lastElementChild.textContent = text;
+  const ck = document.querySelector('[data-check="built"]');
+  if (ck) { ck.querySelector('.ck').textContent = kind === 'ok' ? '✓' : '○'; ck.classList.toggle('text-teal-300', kind === 'ok'); }
+}
+function buildLog(msg){
+  const box = $('#buildLog');
+  const line = document.createElement('div'); line.className = 'log-line fade-in';
+  const bullet = document.createElement('span'); bullet.textContent = '›'; bullet.className = 'text-forge-400';
+  const txt = document.createElement('span'); txt.textContent = msg;
+  line.append(bullet, txt); box.appendChild(line);
+  while (box.children.length > 30) box.firstElementChild.remove();
+  box.scrollTop = box.scrollHeight;
+}
+async function buildFont(opts){
+  opts = opts || {};
+  if (!window.opentype) { toast('opentype.js failed to load — check your connection and reload.', 'err'); return null; }
+  if (!state.glyphs.size) { toast('Nothing to build yet — map at least one character in Step 2.', 'err'); return null; }
+  const family = ($('#fontFamilyInput').value || 'My Handwriting').trim() || 'My Handwriting';
+  const style = ($('#styleNameInput').value || 'Regular').trim() || 'Regular';
+  state.font.family = family; state.font.style = style;
+  buildLog('Building “' + family + ' ' + style + '” from ' + state.glyphs.size + ' mapped character(s)…');
+  setBuildStatus('warn', 'Building…');
+
+  const notdefPath = new opentype.Path();
+  notdefPath.moveTo(60,-100); notdefPath.lineTo(60,650); notdefPath.lineTo(460,650); notdefPath.lineTo(460,-100); notdefPath.closePath();
+  notdefPath.moveTo(120,-40); notdefPath.lineTo(400,-40); notdefPath.lineTo(400,590); notdefPath.lineTo(120,590); notdefPath.closePath();
+  const glyphs = [ new opentype.Glyph({ name: '.notdef', unicode: 0, advanceWidth: 520, path: notdefPath }) ];
+  let totalPoints = 0, blanks = [];
+  const entries = Array.from(state.glyphs.values()).sort((a,b)=> a.char.codePointAt(0) - b.char.codePointAt(0));
+  let hasSpace = false;
+  for (const g of entries) {
+    const cp = g.char.codePointAt(0);
+    if (cp < 32 && g.char !== ' ') { buildLog('Skipped control character ' + unicodeLabel(g.char)); continue; }
+    if (g.char === ' ') { hasSpace = true; glyphs.push(new opentype.Glyph({ name:'space', unicode:32, advanceWidth: 280, path: new opentype.Path() })); continue; }
+    const built = buildGlyphPath(g);
+    totalPoints += built.points;
+    if (built.blank) blanks.push(g.char);
+    glyphs.push(new opentype.Glyph({ name: glyphNameFor(g.char), unicode: cp, advanceWidth: built.advance, path: built.path }));
+  }
+  if (!hasSpace) glyphs.splice(1, 0, new opentype.Glyph({ name:'space', unicode:32, advanceWidth: 260, path: new opentype.Path() }));
+
+  let font, buffer;
+  try {
+    font = new opentype.Font({ familyName: family, styleName: style, unitsPerEm: 1000, ascender: 850, descender: -250, glyphs });
+    // opentype.js 1.3.4's toArrayBuffer() always writes CFF ('OTTO') outlines,
+    // so serialise the same Font object to genuine TrueType (glyf) instead:
+    buffer = serializeTrueType(font);
+    const sig = new DataView(buffer).getUint32(0);
+    if (sig !== 0x00010000) throw new Error('internal error: unexpected sfnt signature 0x' + sig.toString(16));
+  } catch (err) {
+    console.error(err); setBuildStatus('bad', 'Build failed');
+    buildLog('✗ Build error: ' + err.message);
+    toast('Font build failed: ' + err.message, 'err');
+    return null;
+  }
+  state.builtBuffer = buffer; state.dirty = false;
+  const kb = (buffer.byteLength/1024).toFixed(1);
+  $('#statGlyphs').textContent = glyphs.length;
+  $('#statPoints').textContent = totalPoints.toLocaleString();
+  $('#statSize').textContent = kb + ' KB';
+  if (blanks.length) buildLog('⚠ Blank (no ink found): ' + blanks.map(c=>'“'+c+'”').join(' ') + ' — check those boxes/threshold.');
+  buildLog('✓ Assembled ' + glyphs.length + ' glyphs · ' + totalPoints.toLocaleString() + ' outline points · ' + kb + ' KB. Verified genuine TrueType (sfnt 0x00010000, glyf outlines).');
+
+  // live preview via FontFace
+  try {
+    if (state.previewFace) { try { document.fonts.delete(state.previewFace); } catch(_){} }
+    const previewName = 'GlyphsmithPreview' + (++state.previewCount);
+    const face = new FontFace(previewName, buffer);
+    await face.load();
+    document.fonts.add(face); state.previewFace = face; state.builtFamily = previewName;
+    const fam = "'" + previewName + "', 'Segoe Print', cursive";
+    $('#testerText').style.fontFamily = fam;
+    $('#specimen').style.fontFamily = fam;
+    $('#testerNote').textContent = '✓ Live: “' + family + '” is loaded in this page. Characters you have not mapped fall back to a system font.';
+    $('#testerNote').className = 'text-xs text-teal-300 mt-2';
+  } catch (err) {
+    console.warn('FontFace preview failed', err);
+    $('#testerNote').textContent = 'Font built, but the in-page preview could not load it (' + err.message + '). The .ttf download will still work.';
+    $('#testerNote').className = 'text-xs text-amber-300 mt-2';
+  }
+  renderSpecimen();
+  setBuildStatus('ok', 'Built ✓ ' + glyphs.length + ' glyphs · ' + kb + ' KB — proof it below, then download');
+  updateDownloadBtn();
+  if (!opts.silent) toast('Font built! Type in the tester to proof it.', 'ok');
+  return buffer;
+}
+function updateDownloadBtn(){
+  $('#downloadBtn').textContent = state.dirty || !state.builtBuffer ? '⬇ Build & download .TTF' : '⬇ Download .TTF';
+  const fam = escFileName(($('#fontFamilyInput').value || 'My Handwriting')) ;
+  const sty = escFileName(($('#styleNameInput').value || 'Regular')) || 'Regular';
+  $('#downloadFileName').textContent = fam + '-' + sty + '.ttf';
+}
+async function downloadFont(){
+  if (!state.glyphs.size) { toast('Map at least one character first (Step 2).', 'err'); document.getElementById('step2').scrollIntoView({behavior:'smooth'}); return; }
+  let buffer = state.builtBuffer;
+  if (state.dirty || !buffer) { buffer = await buildFont({ silent:true }); if (!buffer) return; }
+  const fam = escFileName(state.font.family), sty = escFileName(state.font.style) || 'Regular';
+  const blob = new Blob([buffer], { type: 'font/ttf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = fam + '-' + sty + '.ttf';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  $('#downloadSummary').textContent = 'Downloaded ' + a.download + ' (' + (buffer.byteLength/1024).toFixed(1) + ' KB, ' + $('#statGlyphs').textContent + ' glyphs). Install it with the guides below, then select “' + state.font.family + '” in any app.';
+  toast('Downloaded ' + a.download + ' 🎉', 'ok');
+}
+function renderSpecimen(){
+  const chars = Array.from(state.glyphs.keys()).sort((a,b)=>a.codePointAt(0)-b.codePointAt(0));
+  $('#specimen').textContent = chars.length ? chars.join(' ') : 'AaBbCcDdEeFfGg 0123';
+}
+
+/* ───────────────────────── auto-detect / grid slice ───────────────────────── */
+function wholeImageBinary(maxDim){
+  const iw = state.image.naturalWidth, ih = state.image.naturalHeight;
+  const f = Math.min(1, maxDim / Math.max(iw, ih));
+  const W = Math.max(1, Math.round(iw*f)), H = Math.max(1, Math.round(ih*f));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d', { willReadFrequently:true });
+  g.fillStyle = '#fff'; g.fillRect(0,0,W,H); g.drawImage(state.image, 0, 0, W, H);
+  const data = g.getImageData(0,0,W,H).data;
+  const bin = new Uint8Array(W*H);
+  const T = state.trace.threshold, inv = state.trace.invert;
+  for (let i=0;i<W*H;i++) {
+    const lum = 0.2126*data[i*4] + 0.7152*data[i*4+1] + 0.0722*data[i*4+2];
+    bin[i] = (inv ? lum > T : lum < T) ? 1 : 0;
+  }
+  return { bin, W, H, fx: iw/W, fy: ih/H };
+}
+function computeComponents(){
+  if (!state.image) return [];
+  if (state.componentsCache) return state.componentsCache;
+  const { bin, W, H, fx, fy } = wholeImageBinary(1400);
+  const labels = new Int32Array(W*H);
+  const comps = [];
+  const stack = [];
+  let current = 0;
+  for (let start=0; start<W*H; start++) {
+    if (!bin[start] || labels[start]) continue;
+    current++;
+    let minX=W, minY=H, maxX=0, maxY=0, count=0;
+    stack.length = 0; stack.push(start); labels[start] = current;
+    while (stack.length) {
+      const idx = stack.pop();
+      const x = idx % W, y = (idx/W)|0;
+      count++;
+      if (x<minX)minX=x; if (x>maxX)maxX=x; if (y<minY)minY=y; if (y>maxY)maxY=y;
+      for (let dy=-1; dy<=1; dy++) for (let dx=-1; dx<=1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x+dx, ny = y+dy;
+        if (nx<0||ny<0||nx>=W||ny>=H) continue;
+        const ni = ny*W+nx;
+        if (bin[ni] && !labels[ni]) { labels[ni] = current; stack.push(ni); }
+      }
+    }
+    comps.push({ x:minX, y:minY, w:maxX-minX+1, h:maxY-minY+1, count });
+  }
+  const minCount = Math.max(6, W*H*0.000002);
+  let boxes = comps.filter(c => c.count >= minCount && c.w >= 2 && c.h >= 2);
+  // merge fragments: touching strokes, dotted i/j, colon, '=' …
+  const overlap1d = (a0,a1,b0,b1)=> Math.min(a1,b1) - Math.max(a0,b0);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer:
+    for (let i=0;i<boxes.length;i++) for (let j=i+1;j<boxes.length;j++) {
+      const a = boxes[i], b = boxes[j];
+      const xOv = overlap1d(a.x, a.x+a.w, b.x, b.x+b.w);
+      const yOv = overlap1d(a.y, a.y+a.h, b.y, b.y+b.h);
+      const xGap = Math.max(0, -xOv), yGap = Math.max(0, -yOv);
+      const avgH = (a.h+b.h)/2;
+      const should = (xOv > -Math.max(2, avgH*0.08) && yOv > -Math.max(2, avgH*0.08))
+        || (xOv > 0.45*Math.min(a.w,b.w) && yGap < avgH*0.75)
+        || (yOv > 0.5*Math.min(a.h,b.h) && xGap < avgH*0.14);
+      if (should) {
+        const nx = Math.min(a.x,b.x), ny = Math.min(a.y,b.y);
+        a.w = Math.max(a.x+a.w, b.x+b.w) - nx; a.h = Math.max(a.y+a.h, b.y+b.h) - ny;
+        a.x = nx; a.y = ny; a.count += b.count;
+        boxes.splice(j,1); merged = true; break outer;
+      }
+    }
+  }
+  // reading order: group into lines, then left→right
+  boxes.sort((a,b)=> (a.y + a.h/2) - (b.y + b.h/2) || a.x - b.x);
+  const lines = [];
+  for (const b of boxes) {
+    const cy = b.y + b.h/2;
+    let line = lines.find(L => Math.abs(cy - L.cy) < Math.max(L.h, b.h)*0.62 || (b.y < L.y + L.h && b.y + b.h > L.y));
+    if (!line) { line = { cy, y: b.y, h: b.h, items: [] }; lines.push(line); }
+    line.items.push(b);
+    line.y = Math.min(line.y, b.y); line.h = Math.max(line.y + line.h, b.y + b.h) - line.y; line.cy = line.y + line.h/2;
+  }
+  lines.sort((a,b)=>a.y-b.y);
+  const ordered = [];
+  for (const L of lines) { L.items.sort((a,b)=>a.x-b.x); ordered.push(...L.items); }
+  const result = ordered.map(c=>{
+    const padX = Math.max(2, c.w*0.10), padY = Math.max(2, c.h*0.08);
+    return clampRect({ x: (c.x-padX)*fx, y: (c.y-padY)*fy, w: (c.w+2*padX)*fx, h: (c.h+2*padY)*fy });
+  });
+  state.componentsCache = result;
+  return result;
+}
+function autoDetect(){
+  if (!state.image) { toast('Upload a sheet first (Step 1).', 'err'); return; }
+  const order = assignmentOrder();
+  if (!order.length) { toast('The assignment order is empty — add some characters first.', 'err'); return; }
+  const comps = computeComponents();
+  if (!comps.length) { toast('No ink blobs found. Lower the threshold or check Invert.', 'err'); return; }
+  if (state.glyphs.size && !confirm('Auto-detect will assign ' + Math.min(comps.length, order.length) + ' boxes and may replace existing mappings. Continue?')) return;
+  pushHistory();
+  let n = 0;
+  for (let i=0;i<comps.length && i<order.length;i++) { addGlyph(order[i], comps[i], { history:false, select:false }); n++; }
+  state.selectedId = null; markDirty(); syncAll(); draw();
+  toast('Auto-detected ' + n + ' characters' + (comps.length > order.length ? ' (' + (comps.length-order.length) + ' extra blobs ignored — extend the assignment order to use them)' : '') + '. Tidy any boxes, then build!', 'ok');
+  const nxt = nextMissingChar(); if (nxt) setTargetChar(nxt);
+}
+function gridSlice(){
+  if (!state.image) { toast('Upload a sheet first (Step 1).', 'err'); return; }
+  const rows = clamp(parseInt($('#gridRows').value,10)||0, 1, 40), cols = clamp(parseInt($('#gridCols').value,10)||0, 1, 40);
+  const order = assignmentOrder();
+  if (!order.length) { toast('The assignment order is empty.', 'err'); return; }
+  if (state.glyphs.size && !confirm('Grid slice will replace existing mappings. Continue?')) return;
+  const W = state.image.naturalWidth, H = state.image.naturalHeight;
+  const cw = W/cols, chh = H/rows, insetX = cw*0.05, insetY = chh*0.05;
+  pushHistory();
+  let n = 0;
+  for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) {
+    const idx = r*cols+c; if (idx >= order.length) break;
+    addGlyph(order[idx], { x: c*cw+insetX, y: r*chh+insetY, w: cw-2*insetX, h: chh-2*insetY }, { history:false, select:false }); n++;
+  }
+  state.selectedId = null; markDirty(); syncAll(); draw();
+  toast('Sliced into a ' + cols + '×' + rows + ' grid — ' + n + ' characters assigned.', 'ok');
+}
+
+/* ───────────────────────── editor previews ───────────────────────── */
+function fitDraw(canvasEl, drawFn, bmpW, bmpH){
+  const g = canvasEl.getContext('2d');
+  const W = canvasEl.width, H = canvasEl.height;
+  g.clearRect(0,0,W,H);
+  g.fillStyle = '#ffffff'; g.fillRect(0,0,W,H);
+  const s = Math.min((W-16)/bmpW, (H-16)/bmpH);
+  const ox = (W - bmpW*s)/2, oy = (H - bmpH*s)/2;
+  drawFn(g, s, ox, oy);
+}
+function syncEditor(){
+  const g = selectedGlyph();
+  $('#selectedEmpty').classList.toggle('hidden', !!g);
+  $('#selectedEditor').classList.toggle('hidden', !g);
+  if (!g) return;
+  $('#editorCharLabel').textContent = g.char === ' ' ? '␣' : g.char;
+  $('#editorUnicode').textContent = unicodeLabel(g.char) + ' · ' + glyphNameFor(g.char);
+  $('#editorCoords').textContent = 'x ' + Math.round(g.x) + ' · y ' + Math.round(g.y) + ' · ' + Math.round(g.w) + '×' + Math.round(g.h) + ' px';
+  $('#reassignInput').value = g.char;
+  // crop
+  fitDraw($('#cropCanvas'), (c,s,ox,oy)=>{ c.drawImage(state.image, g.x, g.y, g.w, g.h, ox, oy, g.w*s, g.h*s); }, g.w, g.h);
+  const { bmp, loops, points } = getTrace(g);
+  // binary
+  fitDraw($('#binaryCanvas'), (c,s,ox,oy)=>{
+    c.fillStyle = '#111';
+    for (let y=0;y<bmp.H;y++) for (let x=0;x<bmp.W;x++) if (bmp.bin[y*bmp.W+x]) c.fillRect(ox+x*s, oy+y*s, Math.ceil(s), Math.ceil(s));
+  }, bmp.W, bmp.H);
+  // vector
+  fitDraw($('#vectorCanvas'), (c,s,ox,oy)=>{
+    const path = new Path2D();
+    for (const { pts } of loops) {
+      pts.forEach(([x,y],i)=>{ const px = ox+(x+0.5)*s, py = oy+(y+0.5)*s; i===0 ? path.moveTo(px,py) : path.lineTo(px,py); });
+      path.closePath();
+    }
+    c.fillStyle = '#111827'; c.fill(path, 'evenodd');
+    c.strokeStyle = '#f59e0b'; c.lineWidth = 1; c.stroke(path);
+  }, bmp.W, bmp.H);
+  $('#traceStats').textContent = bmp.bbox
+    ? loops.length + ' contour(s) · ' + points + ' points · ink ' + bmp.ink.toLocaleString() + ' px' + (state.trace.smooth ? ' · smoothed' : '')
+    : 'No ink in this box at the current threshold.';
+}
+function thumbnail(g){
+  if (thumbCache.has(g.id)) return thumbCache.get(g.id);
+  const c = document.createElement('canvas'); c.width = 100; c.height = 84;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0,0,100,84);
+  const s = Math.min(92/g.w, 76/g.h);
+  x.drawImage(state.image, g.x, g.y, g.w, g.h, (100-g.w*s)/2, (84-g.h*s)/2, g.w*s, g.h*s);
+  const url = c.toDataURL('image/png');
+  thumbCache.set(g.id, url);
+  return url;
+}
+
+/* ───────────────────────── character grid / sync ───────────────────────── */
+function renderGrid(){
+  const grid = $('#glyphGrid');
+  grid.innerHTML = '';
+  let mapped = 0;
+  for (const ch of state.gridChars) {
+    const g = state.glyphs.get(ch);
+    if (g) mapped++;
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'glyph-tile' + (g ? ' mapped' : '') + (ch === state.targetChar && !g ? ' target' : '') + (g && g.id === state.selectedId ? ' selected' : '');
+    tile.title = g ? ('“' + ch + '” ' + unicodeLabel(ch) + ' — click to edit') : ('Aim the next box at “' + ch + '”');
+    if (g && state.image) {
+      const img = document.createElement('img');
+      img.className = 'thumb'; img.alt = ch; img.src = thumbnail(g);
+      tile.appendChild(img);
+    } else {
+      const span = document.createElement('span'); span.className = 'ch'; span.textContent = ch === ' ' ? '␣' : ch;
+      tile.appendChild(span);
+    }
+    const cap = document.createElement('span'); cap.className = 'cap'; cap.textContent = ch === ' ' ? 'space' : ch;
+    tile.appendChild(cap);
+    tile.addEventListener('click', ()=>{
+      if (g) { selectGlyph(g.id); focusGlyph(g); }
+      else { setTargetChar(ch); toast('Next box → “' + ch + '”. Draw it on the sheet (or use Click-select).'); document.getElementById('step2').scrollIntoView({behavior:'smooth', block:'start'}); }
+    });
+    grid.appendChild(tile);
+  }
+  const total = state.gridChars.length;
+  $('#gridCount').textContent = '— ' + mapped + ' of ' + total + ' mapped';
+  $('#progressBar').style.width = (total ? (mapped/total*100) : 0) + '%';
+  $('#progressText').textContent = mapped + ' / ' + total + ' mapped';
+  $('#mapStatus').querySelector('span:last-child').textContent = state.glyphs.size + ' characters mapped';
+  $('#mapStatus').className = 'pill ' + (state.glyphs.size ? 'ok' : '');
+  // checklist
+  const has = range => range.every(c => state.glyphs.has(c));
+  const set = (key, val)=>{ const li = document.querySelector('[data-check="'+key+'"]'); if (!li) return; li.querySelector('.ck').textContent = val ? '✓' : '○'; li.classList.toggle('text-teal-300', !!val); };
+  set('image', !!state.image);
+  set('upper', has(Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ')));
+  set('lower', has(Array.from('abcdefghijklmnopqrstuvwxyz')));
+  set('digits', has(Array.from('0123456789')));
+  renderSpecimen();
+}
+function syncAll(){ renderGrid(); syncEditor(); updateUndoBtn(); }
+function updateMeta(){ /* status pill refreshed in renderGrid */ }
+
+/* ───────────────────────── Otsu ───────────────────────── */
+function otsuThreshold(){
+  if (!state.image) { toast('Upload a sheet first.', 'err'); return; }
+  const { bin, W, H } = wholeImageBinary(700); // bin unused; recompute histogram below
+  const iw = state.image.naturalWidth, ih = state.image.naturalHeight;
+  const f = Math.min(1, 700/Math.max(iw,ih));
+  const c = document.createElement('canvas'); c.width = Math.round(iw*f); c.height = Math.round(ih*f);
+  const g = c.getContext('2d', { willReadFrequently:true });
+  g.fillStyle = '#fff'; g.fillRect(0,0,c.width,c.height); g.drawImage(state.image,0,0,c.width,c.height);
+  const d = g.getImageData(0,0,c.width,c.height).data;
+  const hist = new Float64Array(256); let total = 0;
+  for (let i=0;i<d.length;i+=4){ hist[Math.round(0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2])]++; total++; }
+  let sum = 0; for (let i=0;i<256;i++) sum += i*hist[i];
+  let sumB = 0, wB = 0, best = 0, bestT = 128;
+  for (let t=0;t<256;t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = total - wB; if (!wF) break;
+    sumB += t*hist[t];
+    const mB = sumB/wB, mF = (sum-sumB)/wF;
+    const between = wB*wF*(mB-mF)*(mB-mF);
+    if (between > best) { best = between; bestT = t; }
+  }
+  state.trace.threshold = bestT;
+  $('#thresholdRange').value = bestT; $('#thresholdValue').textContent = bestT;
+  traceCache.clear(); markDirty(); syncEditor();
+  toast('Otsu threshold: ' + bestT, 'ok');
+}
+
+/* ───────────────────────── events wiring ───────────────────────── */
+function setTool(tool){
+  state.tool = tool;
+  for (const [id,t] of [['toolSelect','select'],['toolDraw','draw'],['toolWand','wand'],['toolPan','pan']])
+    document.getElementById(id).setAttribute('aria-pressed', String(t === tool));
+  canvas.dataset.tool = tool;
+}
+// tools
+$('#toolSelect').addEventListener('click', ()=>setTool('select'));
+$('#toolDraw').addEventListener('click', ()=>setTool('draw'));
+$('#toolWand').addEventListener('click', ()=>setTool('wand'));
+$('#toolPan').addEventListener('click', ()=>setTool('pan'));
+// zoom
+$('#zoomIn').addEventListener('click', ()=>zoomAt(viewW/2, viewH/2, 1.25));
+$('#zoomOut').addEventListener('click', ()=>zoomAt(viewW/2, viewH/2, 0.8));
+$('#zoomFit').addEventListener('click', fitView);
+$('#zoom100').addEventListener('click', ()=>{ if (!state.image) return; const cx=viewW/2, cy=viewH/2, ip=toImage(cx,cy); state.view.scale = 1; state.view.ox = cx - ip.x; state.view.oy = cy - ip.y; updateZoomLabel(); draw(); });
+$('#labelsToggle').addEventListener('change', draw);
+$('#undoBtn').addEventListener('click', undo);
+$('#deleteSelectedBtn').addEventListener('click', ()=>{ const g = selectedGlyph(); if (g) { deleteGlyph(g.id); syncAll(); draw(); toast('Deleted “' + g.char + '”.', 'ok'); } });
+// upload
+const dz = $('#dropZone'), fi = $('#fileInput');
+dz.addEventListener('click', ()=>fi.click());
+dz.addEventListener('keydown', e=>{ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fi.click(); } });
+$('#chooseBtn').addEventListener('click', ()=>fi.click());
+fi.addEventListener('change', ()=>{ handleFile(fi.files[0]); fi.value=''; });
+['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add('drop-active'); }));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.remove('drop-active'); }));
+dz.addEventListener('drop', e=>{ const f = e.dataTransfer.files && e.dataTransfer.files[0]; handleFile(f); });
+document.addEventListener('paste', e=>{
+  const item = Array.from(e.clipboardData?.items || []).find(i=>i.type.startsWith('image/'));
+  if (item) { e.preventDefault(); loadImageBlob(item.getAsFile(), 'pasted-sheet.png').catch(err=>toast(err.message,'err')); }
+});
+$('#pasteBtn').addEventListener('click', async ()=>{
+  try { const items = await navigator.clipboard.read(); for (const it of items) { const t = it.types.find(x=>x.startsWith('image/')); if (t) { loadImageBlob(await it.getType(t), 'pasted-sheet.png'); return; } } toast('No image on the clipboard.', 'err'); }
+  catch(_){ toast('Clipboard read is blocked here — just press Ctrl+V anywhere on the page.', 'err'); }
+});
+$('#demoBtn').addEventListener('click', loadDemoSheet);
+// assignment bar
+$('#setTargetBtn').addEventListener('click', ()=>{ const ch = firstChar($('#targetCharInput').value); if (ch) { setTargetChar(ch); toast('Next box → “' + ch + '”'); } });
+$('#targetCharInput').addEventListener('change', ()=>{ const ch = firstChar($('#targetCharInput').value); if (ch) setTargetChar(ch, true); renderGrid(); });
+$('#nextMissingBtn').addEventListener('click', ()=>{ const n = nextMissingChar(); if (n) { setTargetChar(n); const g = state.glyphs.get(n); if (!g) toast('Next missing: “' + n + '”'); } else toast('Nothing missing in the current set 🎉'); });
+// editor
+$('#reassignBtn').addEventListener('click', ()=>{
+  const g = selectedGlyph(); if (!g) return;
+  const ch = firstChar($('#reassignInput').value); if (!ch) return;
+  if (ch === g.char) return;
+  if (state.glyphs.has(ch) && !confirm('“' + ch + '” is already mapped. Replace it with this box?')) return;
+  pushHistory();
+  state.glyphs.delete(g.char);
+  if (state.glyphs.has(ch)) { const old = state.glyphs.get(ch); traceCache.delete(old.id); thumbCache.delete(old.id); state.glyphs.delete(ch); }
+  g.char = ch; state.glyphs.set(ch, g); g.version++;
+  traceCache.delete(g.id); thumbCache.delete(g.id);
+  if (!state.gridChars.includes(ch)) state.gridChars.push(ch);
+  markDirty(); syncAll(); draw();
+  toast('Reassigned box to “' + ch + '”.', 'ok');
+});
+$('#retraceBtn').addEventListener('click', ()=>{ syncEditor(); toast('Trace refreshed with current settings.', 'ok'); });
+$('#deleteGlyphBtn').addEventListener('click', ()=>{ const g = selectedGlyph(); if (g) { deleteGlyph(g.id); syncAll(); draw(); } });
+$('#focusGlyphBtn').addEventListener('click', ()=>focusGlyph(selectedGlyph()));
+// trace settings
+function traceSettingChanged(){
+  state.trace.threshold = parseInt($('#thresholdRange').value, 10);
+  state.trace.invert = $('#invertCheck').checked;
+  state.trace.simplify = parseFloat($('#simplifyRange').value);
+  state.trace.smooth = $('#smoothCheck').checked;
+  state.trace.speck = parseInt($('#speckRange').value, 10);
+  $('#thresholdValue').textContent = state.trace.threshold;
+  $('#simplifyValue').textContent = state.trace.simplify.toFixed(1) + ' px';
+  $('#speckValue').textContent = state.trace.speck + ' px²';
+  traceCache.clear(); state.componentsCache = null; markDirty(); syncEditor();
+}
+['thresholdRange','invertCheck','simplifyRange','smoothCheck','speckRange'].forEach(id=> document.getElementById(id).addEventListener('input', traceSettingChanged));
+$('#otsuBtn').addEventListener('click', otsuThreshold);
+// auto slicing
+$('#autoDetectBtn').addEventListener('click', autoDetect);
+$('#gridSliceBtn').addEventListener('click', gridSlice);
+$('#clearAllBtn').addEventListener('click', ()=>{ if (!state.glyphs.size) return; if (confirm('Remove all ' + state.glyphs.size + ' boxes?')) { pushHistory(); state.glyphs.clear(); state.selectedId = null; traceCache.clear(); thumbCache.clear(); markDirty(); syncAll(); draw(); } });
+// character set
+$('#charsetPreset').addEventListener('change', e=>{ state.gridChars = uniqChars(CHARSETS[e.target.value]); setTargetChar(nextMissingChar() || state.gridChars[0] || 'A', true); renderGrid(); });
+$('#addCharBtn').addEventListener('click', ()=>{
+  const ch = firstChar($('#customCharInput').value);
+  if (!ch) return;
+  if (!state.gridChars.includes(ch)) state.gridChars.push(ch);
+  $('#customCharInput').value = '';
+  setTargetChar(ch); renderGrid();
+  toast('Added “' + ch + '” to the map — draw its box next.', 'ok');
+});
+// step 3 / 4
+$('#fontFamilyInput').addEventListener('input', e=>{ state.font.family = e.target.value; markDirty(); updateDownloadBtn(); });
+$('#styleNameInput').addEventListener('input', e=>{ state.font.style = e.target.value; markDirty(); updateDownloadBtn(); });
+$('#sizingModeSelect').addEventListener('change', e=>{ state.font.sizing = e.target.value; markDirty(); });
+$('#sideBearingRange').addEventListener('input', e=>{ state.font.sideBearing = parseInt(e.target.value,10); $('#sideBearingValue').textContent = state.font.sideBearing + ' units'; markDirty(); });
+$('#buildBtn').addEventListener('click', ()=>buildFont());
+$('#downloadBtn').addEventListener('click', downloadFont);
+$('#testerSize').addEventListener('input', e=>{ $('#testerText').style.fontSize = e.target.value + 'px'; $('#specimen').style.fontSize = Math.max(18, e.target.value*0.8) + 'px'; $('#testerSizeValue').textContent = e.target.value + ' px'; });
+$('#testerTracking').addEventListener('input', e=>{ $('#testerText').style.letterSpacing = e.target.value + 'px'; $('#specimen').style.letterSpacing = e.target.value + 'px'; $('#testerTrackingValue').textContent = e.target.value + ' px'; });
+$$('.sample-btn').forEach(b=> b.addEventListener('click', ()=>{ $('#testerText').value = b.dataset.sample; $('#testerText').focus(); }));
+// keyboard
+window.addEventListener('keydown', e=>{
+  const tag = (e.target.tagName || '').toLowerCase();
+  const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+  if (e.code === 'Space' && !typing) { state.spaceDown = true; canvas.dataset.tool = 'pan'; }
+  if (typing) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  const g = selectedGlyph();
+  switch (e.key) {
+    case 'v': case 'V': setTool('select'); break;
+    case 'b': case 'B': setTool('draw'); break;
+    case 'w': case 'W': setTool('wand'); break;
+    case 'h': case 'H': setTool('pan'); break;
+    case '+': case '=': zoomAt(viewW/2, viewH/2, 1.25); break;
+    case '-': case '_': zoomAt(viewW/2, viewH/2, 0.8); break;
+    case 'Delete': case 'Backspace': if (g) { deleteGlyph(g.id); syncAll(); draw(); } break;
+    case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown':
+      if (g) { e.preventDefault(); const s = e.shiftKey ? 10 : 1;
+        if (e.key==='ArrowLeft') g.x-=s; if (e.key==='ArrowRight') g.x+=s; if (e.key==='ArrowUp') g.y-=s; if (e.key==='ArrowDown') g.y+=s;
+        clampRect(g); g.version++; traceCache.delete(g.id); thumbCache.delete(g.id); markDirty(); syncAll(); draw(); }
+      break;
+    case 'Escape': state.selectedId = null; syncEditor(); renderGrid(); draw(); break;
+  }
+});
+window.addEventListener('keyup', e=>{ if (e.code === 'Space') { state.spaceDown = false; canvas.dataset.tool = state.tool; } });
+
+/* ───────────────────────── init ───────────────────────── */
+$('#assignOrder').value = CHARSETS.full;
+$('#testerText').style.fontSize = '44px';
+if (window.opentype) { const el = $('#libStatus'); el.className = 'pill ok'; el.querySelector('span:last-child').textContent = 'opentype.js ready'; }
+else { const el = $('#libStatus'); el.className = 'pill bad'; el.querySelector('span:last-child').textContent = 'opentype.js failed to load — check connection'; }
+setTargetChar('A', true);
+syncAll(); updateDownloadBtn(); updateUndoBtn();
+new ResizeObserver(()=>resizeCanvas()).observe(wrap);
+resizeCanvas();
+})();
+</script>
+</body>
+</html>
